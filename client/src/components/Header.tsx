@@ -18,26 +18,24 @@ export default function Header() {
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center justify-between px-4 mx-auto max-w-7xl">
         <div className="flex items-center gap-8">
-          <Link href="/">
-            <a className="flex items-center gap-2 hover-elevate active-elevate-2 px-2 py-1 rounded-md" data-testid="link-home">
-              <TrendingUp className="h-6 w-6 text-primary" />
-              <span className="text-xl font-bold">StockPredict AI</span>
-            </a>
+          <Link href="/" className="flex items-center gap-2 hover-elevate active-elevate-2 px-2 py-1 rounded-md" data-testid="link-home">
+            <TrendingUp className="h-6 w-6 text-primary" />
+            <span className="text-xl font-bold">StockPredict AI</span>
           </Link>
           
           <nav className="hidden md:flex items-center gap-1">
             {navItems.map((item) => (
-              <Link key={item.path} href={item.path}>
-                <a
-                  className={`px-3 py-2 text-sm font-medium rounded-md transition-colors hover-elevate active-elevate-2 ${
-                    location === item.path
-                      ? "bg-accent text-accent-foreground"
-                      : "text-muted-foreground"
-                  }`}
-                  data-testid={`link-nav-${item.label.toLowerCase().replace(" ", "-")}`}
-                >
-                  {item.label}
-                </a>
+              <Link
+                key={item.path}
+                href={item.path}
+                className={`px-3 py-2 text-sm font-medium rounded-md transition-colors hover-elevate active-elevate-2 ${
+                  location === item.path
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground"
+                }`}
+                data-testid={`link-nav-${item.label.toLowerCase().replace(" ", "-")}`}
+              >
+                {item.label}
               </Link>
             ))}
           </nav>

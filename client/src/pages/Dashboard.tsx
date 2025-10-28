@@ -9,23 +9,49 @@ import Watchlist from "@/components/Watchlist";
 import RiskDisclaimer from "@/components/RiskDisclaimer";
 import { Activity, BarChart3, TrendingUp, Move, Gauge, Target, Award, DollarSign } from "lucide-react";
 
+const stockPriceRanges: Record<string, { base: number; volatility: number }> = {
+  AAPL: { base: 162, volatility: 5 },
+  GOOGL: { base: 138, volatility: 4 },
+  MSFT: { base: 378, volatility: 8 },
+  TSLA: { base: 242, volatility: 12 },
+  AMZN: { base: 148, volatility: 6 },
+};
+
+const generateChartData = (stock: string, timeframe: Timeframe) => {
+  const { base, volatility } = stockPriceRanges[stock] || stockPriceRanges.AAPL;
+  const points = timeframe === "1H" ? 24 : timeframe === "4H" ? 18 : timeframe === "1D" ? 30 : timeframe === "1W" ? 12 : 6;
+  
+  const data = [];
+  let price = base;
+  
+  for (let i = 0; i < points; i++) {
+    const change = (Math.random() - 0.5) * volatility;
+    price = price + change;
+    data.push({
+      date: timeframe === "1H" ? `${i}:00` : timeframe === "4H" ? `Day ${i * 4}h` : `Day ${i + 1}`,
+      price: parseFloat(price.toFixed(2)),
+    });
+  }
+  
+  for (let i = 0; i < 5; i++) {
+    const change = (Math.random() - 0.3) * volatility;
+    price = price + change;
+    data.push({
+      date: timeframe === "1H" ? `${points + i}:00` : `+${i + 1}`,
+      price: parseFloat(price.toFixed(2)),
+      predicted: true,
+    });
+  }
+  
+  return data;
+};
+
 export default function Dashboard() {
   const [selectedStock, setSelectedStock] = useState("AAPL");
   const [searchQuery, setSearchQuery] = useState("");
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
 
-  const mockChartData = [
-    { date: "Day 1", price: 150 },
-    { date: "Day 2", price: 152 },
-    { date: "Day 3", price: 148 },
-    { date: "Day 4", price: 155 },
-    { date: "Day 5", price: 157 },
-    { date: "Day 6", price: 160 },
-    { date: "Day 7", price: 162 },
-    { date: "Day 8", price: 165, predicted: true },
-    { date: "Day 9", price: 168, predicted: true },
-    { date: "Day 10", price: 170, predicted: true },
-  ];
+  const mockChartData = generateChartData(selectedStock, timeframe);
 
   const mockIndicators = [
     {
