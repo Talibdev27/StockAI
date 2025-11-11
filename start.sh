@@ -7,11 +7,15 @@ set -e
 echo "🚀 Starting StockVue application (Full Stack)..."
 
 # Check if Python is available
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python3 not found. Render Node.js environment needs Python installed."
+if ! command -v python3 &> /dev/null && ! command -v python &> /dev/null; then
+    echo "❌ Python not found. Render Node.js environment needs Python installed."
     echo "💡 Tip: Use separate services or ensure Python is available in build environment"
     exit 1
 fi
+
+# Use python3 if available, otherwise python
+PYTHON_CMD=$(command -v python3 || command -v python)
+echo "Using Python: $PYTHON_CMD"
 
 # Start Python backend in background
 echo "📦 Starting Python Flask backend..."
@@ -20,7 +24,7 @@ cd python_backend
 # Create virtual environment if it doesn't exist
 if [ ! -d ".venv" ]; then
     echo "Creating Python virtual environment..."
-    python3 -m venv .venv || python3 -m venv venv || python -m venv .venv
+    $PYTHON_CMD -m venv .venv || $PYTHON_CMD -m venv venv
 fi
 
 # Activate virtual environment (try different paths)
