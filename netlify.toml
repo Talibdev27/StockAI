@@ -1,8 +1,0 @@
-[build]
-command = "npm install && npm run build"
-publish = "dist/public"
-
-[env]
-NODE_ENV = "production"
-PYTHON_API_BASE = "https://your-python-backend-url.com"
-
