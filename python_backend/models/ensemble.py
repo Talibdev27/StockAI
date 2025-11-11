@@ -7,6 +7,7 @@ LSTM, and ARIMA models to produce more robust and accurate predictions.
 
 import os
 import numpy as np
+from typing import Dict, Tuple, Any
 from .linear_model import LinearRegressionModel
 from .lstm_model import LSTMModel
 from .arima_model import ARIMAModel
@@ -34,13 +35,29 @@ try:
 except Exception:
     _HAS_PROPHET = False
 
+try:
+    from evaluation import get_model_performance_metrics
+    _HAS_EVALUATION = True
+except Exception:
+    _HAS_EVALUATION = False
+
 
 class EnsembleModel:
     """
     Ensemble model that combines multiple prediction models.
     
     This class trains multiple models and combines their predictions
-    using weighted voting based on individual model confidence scores.
+    using performance-based weighting when historical evaluation data is available,
+    falling back to confidence-based weighting otherwise.
+    
+    Performance-based weighting:
+    - Uses historical prediction accuracy (RMSE, MAE, direction accuracy) from evaluated predictions
+    - Models with better historical performance get higher weights
+    - Automatically adapts as more evaluations accumulate
+    
+    Confidence-based weighting (fallback):
+    - Uses validation metrics from training (RMSE, R², AIC)
+    - Used when insufficient performance data is available
     """
     
     def __init__(self, interval="1d"):
@@ -96,6 +113,7 @@ class EnsembleModel:
         
         self.confidences = {}
         self.warnings = []
+        self.performance_metrics = {}  # Cache for performance metrics
         
     def _get_lag(self):
         """
@@ -176,14 +194,86 @@ class EnsembleModel:
                 results['prophet'] = {"trained": False, "error": str(e)}
                 
         return results
+    
+    def _calculate_performance_weights(
+        self, 
+        valid_models: dict, 
+        symbol: str = None, 
+        interval: str = None
+    ) -> Tuple[Dict[str, float], bool]:
+        """
+        Calculate weights based on historical performance metrics.
         
-    def predict_ensemble(self, closes, horizon):
+        Args:
+            valid_models: Dictionary of model names with valid predictions
+            symbol: Stock symbol for filtering performance data
+            interval: Time interval for filtering performance data
+        
+        Returns:
+            Tuple of (weights_dict, use_performance_based)
+            - weights_dict: Normalized weights for each model
+            - use_performance_based: True if performance data was used, False if fell back to confidence
+        """
+        if not _HAS_EVALUATION:
+            # Fallback to confidence-based if evaluation module not available
+            total_confidence = sum(self.confidences[k] for k in valid_models.keys())
+            weights = {k: self.confidences[k] / total_confidence for k in valid_models.keys()}
+            return weights, False
+        
+        try:
+            # Get performance metrics from database
+            performance_metrics = get_model_performance_metrics(
+                symbol=symbol,
+                interval=interval or self.interval,
+                min_evaluations=3  # Minimum evaluations needed
+            )
+            
+            if not performance_metrics:
+                # No performance data available, use confidence-based
+                total_confidence = sum(self.confidences[k] for k in valid_models.keys())
+                weights = {k: self.confidences[k] / total_confidence for k in valid_models.keys()}
+                return weights, False
+            
+            # Calculate weights based on performance scores
+            # Use performance score if available, otherwise use confidence
+            performance_scores = {}
+            for model_name in valid_models.keys():
+                if model_name in performance_metrics:
+                    # Use performance score (0-1, higher is better)
+                    performance_scores[model_name] = performance_metrics[model_name]["score"]
+                else:
+                    # Model not in performance data, use confidence as fallback
+                    performance_scores[model_name] = self.confidences.get(model_name, 0.1)
+            
+            # Normalize performance scores to weights
+            total_score = sum(performance_scores.values())
+            if total_score > 0:
+                weights = {k: performance_scores[k] / total_score for k in valid_models.keys()}
+                # Store performance metrics for reference
+                self.performance_metrics = performance_metrics
+                return weights, True
+            else:
+                # All scores are zero, fallback to confidence
+                total_confidence = sum(self.confidences[k] for k in valid_models.keys())
+                weights = {k: self.confidences[k] / total_confidence for k in valid_models.keys()}
+                return weights, False
+                
+        except Exception as e:
+            print(f"Warning: Failed to calculate performance weights: {e}")
+            # Fallback to confidence-based on error
+            total_confidence = sum(self.confidences[k] for k in valid_models.keys())
+            weights = {k: self.confidences[k] / total_confidence for k in valid_models.keys()}
+            return weights, False
+        
+    def predict_ensemble(self, closes, horizon, symbol: str = None, interval: str = None):
         """
         Generate weighted ensemble prediction.
         
         Args:
             closes (np.ndarray): Historical closing prices
             horizon (int): Number of future periods to predict
+            symbol (str): Stock symbol for performance-based weighting (optional)
+            interval (str): Time interval for performance-based weighting (optional)
             
         Returns:
             dict: Ensemble prediction results with model breakdown
@@ -222,10 +312,13 @@ class EnsembleModel:
         
         if not valid_models:
             raise ValueError("No models produced valid predictions")
-            
-        # Calculate weighted average based on confidence scores
-        total_confidence = sum(self.confidences[k] for k in valid_models.keys())
-        weights = {k: self.confidences[k] / total_confidence for k in valid_models.keys()}
+        
+        # Calculate weights using performance-based or confidence-based method
+        weights, use_performance_based = self._calculate_performance_weights(
+            valid_models, 
+            symbol=symbol, 
+            interval=interval or self.interval
+        )
         
         # Weighted next prediction
         ensemble_next = sum(predictions[k] * weights[k] for k in valid_models.keys())
@@ -239,26 +332,42 @@ class EnsembleModel:
                 if forecasts[k] is not None
             )
             ensemble_forecast.append(weighted_val)
-            
+        
         # Ensemble confidence is weighted average of individual confidences
         ensemble_confidence = sum(
             self.confidences[k] * weights[k] 
             for k in valid_models.keys()
         )
         
+        # Build result with model breakdown
+        model_breakdown = {}
+        for k in valid_models.keys():
+            model_info = {
+                "prediction": round(predictions[k], 2),
+                "confidence": round(self.confidences[k] * 100, 1),
+                "weight": round(weights[k] * 100, 1)
+            }
+            
+            # Add performance metrics if available and using performance-based weighting
+            if use_performance_based and k in self.performance_metrics:
+                perf = self.performance_metrics[k]
+                model_info["performance"] = {
+                    "rmse": perf["rmse"],
+                    "mae": perf["mae"],
+                    "direction_accuracy": perf["direction_accuracy"],
+                    "evaluations": perf["count"]
+                }
+            
+            model_breakdown[k] = model_info
+        
         result = {
             "predictedPrice": round(ensemble_next, 2),
             "confidence": round(ensemble_confidence * 100, 1),
             "forecast": [round(x, 2) for x in ensemble_forecast],
-            "models": {
-                k: {
-                    "prediction": round(predictions[k], 2),
-                    "confidence": round(self.confidences[k] * 100, 1),
-                    "weight": round(weights[k] * 100, 1)
-                }
-                for k in valid_models.keys()
-            }
+            "models": model_breakdown,
+            "weighting_method": "performance" if use_performance_based else "confidence"
         }
+        
         if self.warnings:
             result["warnings"] = list(dict.fromkeys(self.warnings))
         return result

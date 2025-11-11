@@ -585,3 +585,162 @@ def get_prediction_history(
         results.append(result)
     
     return results
+
+
+def get_model_performance_metrics(
+    symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+    min_evaluations: int = 5
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Calculate performance metrics for each individual model from evaluated predictions.
+    
+    Extracts individual model predictions from model_breakdown JSON and compares
+    with actual prices to calculate per-model accuracy metrics.
+    
+    Args:
+        symbol: Filter by symbol (optional)
+        interval: Filter by interval (optional)
+        min_evaluations: Minimum number of evaluations needed to calculate metrics
+    
+    Returns:
+        Dictionary mapping model names to their performance metrics:
+        {
+            "linear": {"rmse": 1.2, "mae": 0.8, "direction_accuracy": 65.0, "count": 10, "score": 0.75},
+            "lstm": {...},
+            ...
+        }
+        Returns empty dict if insufficient data
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    placeholder = _get_placeholder()
+    
+    # Query evaluated predictions with model breakdown
+    query = '''
+        SELECT 
+            p.model_breakdown,
+            p.current_price,
+            e.actual_price,
+            e.error_percent,
+            e.direction_actual,
+            e.correct
+        FROM predictions p
+        JOIN evaluations e ON p.id = e.prediction_id
+    '''
+    params = []
+    
+    conditions = []
+    if symbol:
+        conditions.append(f"p.symbol = {placeholder}")
+        params.append(symbol)
+    if interval:
+        conditions.append(f"p.interval = {placeholder}")
+        params.append(interval)
+    
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    
+    query += " ORDER BY p.timestamp DESC"
+    
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        return {}
+    
+    # Collect per-model predictions and actuals
+    model_data: Dict[str, List[Dict[str, Any]]] = {}
+    
+    for row in rows:
+        row_dict = _row_to_dict(row)
+        model_breakdown = row_dict.get("model_breakdown")
+        actual_price = row_dict.get("actual_price")
+        current_price = row_dict.get("current_price")
+        direction_actual = row_dict.get("direction_actual")
+        
+        if not model_breakdown or actual_price is None or current_price is None:
+            continue
+        
+        # Parse model breakdown JSON
+        try:
+            if isinstance(model_breakdown, str):
+                breakdown = json.loads(model_breakdown)
+            else:
+                breakdown = model_breakdown
+        except:
+            continue
+        
+        # Extract individual model predictions
+        for model_name, model_info in breakdown.items():
+            if not isinstance(model_info, dict):
+                continue
+            
+            model_prediction = model_info.get("prediction")
+            if model_prediction is None:
+                continue
+            
+            # Calculate error for this model's prediction
+            error = abs(model_prediction - actual_price)
+            error_percent = (error / current_price) * 100 if current_price > 0 else 0
+            
+            # Determine if direction was correct
+            predicted_dir = classify_direction(model_prediction, current_price, threshold=0.005)
+            direction_correct = predicted_dir == direction_actual
+            
+            if model_name not in model_data:
+                model_data[model_name] = []
+            
+            model_data[model_name].append({
+                "predicted": model_prediction,
+                "actual": actual_price,
+                "current": current_price,
+                "error": error,
+                "error_percent": error_percent,
+                "direction_correct": direction_correct,
+            })
+    
+    # Calculate metrics per model
+    model_metrics = {}
+    
+    for model_name, data_list in model_data.items():
+        if len(data_list) < min_evaluations:
+            continue
+        
+        errors = [d["error"] for d in data_list]
+        error_percents = [d["error_percent"] for d in data_list]
+        direction_correct_count = sum(1 for d in data_list if d["direction_correct"])
+        
+        # Calculate metrics
+        rmse = np.sqrt(np.mean([e**2 for e in errors])) if errors else float('inf')
+        mae = np.mean(errors) if errors else float('inf')
+        avg_error_percent = np.mean(error_percents) if error_percents else float('inf')
+        direction_accuracy = (direction_correct_count / len(data_list)) * 100 if data_list else 0
+        
+        # Calculate performance score (higher is better)
+        # Combine inverse RMSE (normalized) and direction accuracy
+        # Lower RMSE = better, higher direction accuracy = better
+        if rmse > 0 and not np.isinf(rmse):
+            # Normalize RMSE: convert to score (0-1), lower RMSE = higher score
+            # Use inverse RMSE normalized by average price
+            avg_price = np.mean([d["current"] for d in data_list])
+            normalized_rmse = rmse / avg_price if avg_price > 0 else 1.0
+            rmse_score = max(0.0, min(1.0, 1.0 / (1.0 + normalized_rmse * 10)))
+            
+            # Combine RMSE score (70%) and direction accuracy (30%)
+            performance_score = (rmse_score * 0.7) + (direction_accuracy / 100 * 0.3)
+        else:
+            performance_score = direction_accuracy / 100
+        
+        model_metrics[model_name] = {
+            "rmse": round(rmse, 4),
+            "mae": round(mae, 4),
+            "avg_error_percent": round(avg_error_percent, 2),
+            "direction_accuracy": round(direction_accuracy, 2),
+            "count": len(data_list),
+            "score": round(performance_score, 4),  # Overall performance score (0-1)
+        }
+    
+    return model_metrics

@@ -495,8 +495,8 @@ def predict(symbol: str):
         # Train all models
         training_results = ensemble.train_all(closes, symbol=symbol, interval=interval, force_retrain=False)
         
-        # Get ensemble prediction
-        result = ensemble.predict_ensemble(closes, horizon)
+        # Get ensemble prediction (pass symbol and interval for performance-based weighting)
+        result = ensemble.predict_ensemble(closes, horizon, symbol=symbol, interval=interval)
         result["symbol"] = symbol
         result["training"] = training_results  # Optional: for debugging
         if getattr(ensemble, "warnings", None):
@@ -606,8 +606,8 @@ def backtest(symbol: str):
                 ensemble = EnsembleModel(interval=interval)
                 ensemble.train_all(training_data, symbol=symbol, interval=interval, force_retrain=False)
                 
-                # Predict next value
-                result = ensemble.predict_ensemble(training_data, horizon)
+                # Predict next value (pass symbol and interval for performance-based weighting)
+                result = ensemble.predict_ensemble(training_data, horizon, symbol=symbol, interval=interval)
                 next_pred = result["predictedPrice"]
                 predictions.append(next_pred)
                 
