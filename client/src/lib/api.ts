@@ -1,5 +1,14 @@
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001";
 
+// Warn if API_BASE is not set in production
+if (import.meta.env.PROD && !import.meta.env.VITE_API_BASE) {
+  console.error(
+    "⚠️ VITE_API_BASE is not set! " +
+    "Please set it in Vercel environment variables. " +
+    "Using fallback:", API_BASE
+  );
+}
+
 function checkIfHtmlResponse(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("<!DOCTYPE") || 
