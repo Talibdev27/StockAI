@@ -560,6 +560,7 @@ export default function PredictionHistory() {
                     <TableHead>Actual Direction</TableHead>
                     <TableHead>Error</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead className="w-[100px]">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -626,6 +627,16 @@ export default function PredictionHistory() {
                         ) : (
                           <Badge variant="outline">Pending</Badge>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDelete(item.id)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
