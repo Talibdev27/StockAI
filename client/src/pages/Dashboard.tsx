@@ -12,6 +12,7 @@ import { Activity, BarChart3, TrendingUp, Move, Gauge, Target, Award, DollarSign
 import { useHistorical, usePrediction, useQuote, useIndicators, useBackendHealth, useTradingPerformance } from "@/hooks/useData";
 import PredictionAccuracy from "@/components/PredictionAccuracy";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Card } from "@/components/ui/card";
 
 const stockPriceRanges: Record<string, { base: number; volatility: number }> = {
   AAPL: { base: 162, volatility: 5 },
