@@ -1,7 +1,7 @@
 # Railway Nixpacks Configuration for Python Backend
 
 [phases.setup]
-nixPkgs = ['python311', 'pip']
+nixPkgs = ['python311']
 
 [phases.install]
 cmds = ['cd python_backend && pip install -r requirements.txt']
