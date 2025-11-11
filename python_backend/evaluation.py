@@ -303,6 +303,121 @@ def classify_direction(predicted_price: float, current_price: float, threshold: 
         return "neutral"
 
 
+def fetch_historical_price_at_time(
+    symbol: str,
+    target_time: datetime,
+    interval: str
+) -> Optional[float]:
+    """
+    Fetch the historical price for a symbol at a specific time point.
+    
+    Args:
+        symbol: Stock symbol
+        target_time: The time point to fetch price for
+        interval: The interval used for the prediction (e.g., "1d", "1h", "15m")
+    
+    Returns:
+        Historical price at the target time, or None if unavailable
+    """
+    try:
+        ticker = Ticker(symbol)
+        
+        # Determine the period needed to fetch historical data
+        # We need data from before target_time to after target_time
+        now = datetime.now()
+        time_diff = now - target_time
+        
+        # Map interval to yahooquery period
+        # For intraday intervals, we need recent data
+        if interval in ["5m", "15m", "1h", "4h"]:
+            # For intraday, fetch last 60 days to ensure we get the data point
+            period = "60d"
+        elif interval == "1d":
+            # For daily, fetch enough to cover the target date
+            period = "1y" if time_diff.days < 365 else "2y"
+        elif interval == "1wk":
+            period = "2y"
+        elif interval == "1mo":
+            period = "5y"
+        else:
+            period = "1y"
+        
+        # Fetch historical data
+        df = ticker.history(period=period, interval=interval)
+        
+        if df is None or df.empty:
+            return None
+        
+        # Handle MultiIndex if present
+        if isinstance(df.index, pd.MultiIndex):
+            df = df.reset_index(level=0, drop=True)
+        
+        # Reset index to get date/datetime as column
+        df = df.reset_index()
+        
+        # Find the column name for date/datetime
+        date_col = None
+        for col in ["date", "Date", "datetime", "Datetime"]:
+            if col in df.columns:
+                date_col = col
+                break
+        
+        if date_col is None:
+            return None
+        
+        # Convert date column to datetime
+        df[date_col] = pd.to_datetime(df[date_col])
+        
+        # Find the closest data point to target_time
+        # For daily/weekly/monthly, find the exact date
+        # For intraday, find the closest time
+        
+        if interval in ["1d", "1wk", "1mo"]:
+            # For daily/weekly/monthly, match the date
+            target_date = target_time.date()
+            df["date_only"] = df[date_col].dt.date
+            matching_rows = df[df["date_only"] == target_date]
+        else:
+            # For intraday, find the closest time within the same day
+            target_date = target_time.date()
+            df["date_only"] = df[date_col].dt.date
+            same_day = df[df["date_only"] == target_date]
+            
+            if same_day.empty:
+                # If no exact match, try to find the closest time
+                df["time_diff"] = abs((df[date_col] - target_time).dt.total_seconds())
+                matching_rows = df.nsmallest(1, "time_diff")
+            else:
+                # Find closest time on the same day
+                same_day["time_diff"] = abs((same_day[date_col] - target_time).dt.total_seconds())
+                matching_rows = same_day.nsmallest(1, "time_diff")
+        
+        if matching_rows.empty:
+            return None
+        
+        # Get the close price from the matching row
+        close_col = None
+        for col in ["close", "Close"]:
+            if col in matching_rows.columns:
+                close_col = col
+                break
+        
+        if close_col is None:
+            return None
+        
+        price = matching_rows.iloc[0][close_col]
+        
+        # Handle NaN or None
+        if pd.isna(price) or price is None:
+            return None
+        
+        return float(price)
+        
+    except Exception as e:
+        print(f"Error fetching historical price for {symbol} at {target_time}: {e}")
+        return None
+
+
 def evaluate_prediction(prediction_id: int, actual_price: float) -> Dict[str, Any]:
     """
     Evaluate a prediction by comparing with actual price.
