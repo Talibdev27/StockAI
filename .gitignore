@@ -38,3 +38,10 @@ python_backend/.venv/
 python_backend/*.db
 python_backend/*.db-shm
 python_backend/*.db-wal
+
+# Temporary/Unnecessary files
+attached_assets/
+*.ipynb
+.ipynb_checkpoints/
+test_*.py
+*_test.py
