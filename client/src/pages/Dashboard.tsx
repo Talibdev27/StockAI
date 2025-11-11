@@ -208,6 +208,41 @@ export default function Dashboard() {
     return result;
   }, [indicatorsData]);
 
+  // Calculate real performance metrics from API data
+  const realMetrics = useMemo(() => {
+    if (!performanceMetrics || performanceMetrics.total_predictions === 0) {
+      return null; // No data available
+    }
+    
+    return [
+      {
+        name: "Prediction Accuracy",
+        value: `${performanceMetrics.prediction_accuracy.toFixed(1)}%`,
+        icon: <Target className="h-6 w-6 text-primary" />,
+        description: `Model accuracy over last 30 days (${performanceMetrics.total_predictions} predictions)`,
+      },
+      {
+        name: "Sharpe Ratio",
+        value: performanceMetrics.sharpe_ratio.toFixed(2),
+        icon: <TrendingUp className="h-6 w-6 text-primary" />,
+        description: "Risk-adjusted return measure",
+      },
+      {
+        name: "Win Rate",
+        value: `${performanceMetrics.win_rate.toFixed(1)}%`,
+        icon: <Award className="h-6 w-6 text-primary" />,
+        description: `Percentage of profitable predictions (${performanceMetrics.profitable_predictions}/${performanceMetrics.total_predictions})`,
+      },
+      {
+        name: "Total Return",
+        value: `${performanceMetrics.total_return >= 0 ? '+' : ''}${performanceMetrics.total_return.toFixed(1)}%`,
+        icon: <DollarSign className="h-6 w-6 text-primary" />,
+        description: "Cumulative return over time",
+      },
+    ];
+  }, [performanceMetrics]);
+  
+  // Fallback to mock metrics if no real data (for display purposes)
   const mockMetrics = [
     {
       name: "Prediction Accuracy",
