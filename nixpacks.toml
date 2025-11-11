@@ -1,5 +1,4 @@
-[providers]
-python = true
+# Railway Nixpacks Configuration for Python Backend
 
 [phases.setup]
 nixPkgs = ['python311', 'pip']
@@ -11,5 +10,4 @@ cmds = ['cd python_backend && pip install -r requirements.txt']
 cmds = []
 
 [start]
-cmd = 'gunicorn python_backend.app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --chdir python_backend'
-
+cmd = 'cd python_backend && gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120'
