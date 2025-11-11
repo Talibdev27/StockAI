@@ -9,7 +9,7 @@ import Watchlist from "@/components/Watchlist";
 import RiskDisclaimer from "@/components/RiskDisclaimer";
 import HelpSection from "@/components/HelpSection";
 import { Activity, BarChart3, TrendingUp, Move, Gauge, Target, Award, DollarSign, Loader2, AlertCircle, CheckCircle2, XCircle } from "lucide-react";
-import { useHistorical, usePrediction, useQuote, useIndicators, useBackendHealth } from "@/hooks/useData";
+import { useHistorical, usePrediction, useQuote, useIndicators, useBackendHealth, useTradingPerformance } from "@/hooks/useData";
 import PredictionAccuracy from "@/components/PredictionAccuracy";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -84,6 +84,7 @@ export default function Dashboard() {
   const { data: quoteData, isLoading: quoteLoading, error: quoteError } = useQuote(selectedStock);
   const { data: indicatorsData, isLoading: indicatorsLoading, error: indicatorsError } = useIndicators(selectedStock, range, interval);
   const { data: healthData, error: healthError } = useBackendHealth();
+  const { data: performanceMetrics, isLoading: performanceLoading } = useTradingPerformance(selectedStock, interval, 30);
 
   const chartData = useMemo(() => {
     if (!histData || histData.length === 0) return [];
@@ -409,8 +410,38 @@ export default function Dashboard() {
             </div>
 
             <div>
-              <h2 className="text-xl font-semibold mb-4">Model Performance</h2>
-              <PerformanceMetrics metrics={mockMetrics} />
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold">Model Performance</h2>
+                {performanceLoading && (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                )}
+              </div>
+              {realMetrics ? (
+                <PerformanceMetrics metrics={realMetrics} />
+              ) : performanceLoading ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {[1, 2, 3, 4].map((i) => (
+                    <Card key={i} className="p-6">
+                      <div className="space-y-4">
+                        <div className="p-3 rounded-md bg-primary/10 w-fit">
+                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        </div>
+                        <div>
+                          <p className="text-sm text-muted-foreground mb-1">Loading...</p>
+                          <p className="text-3xl font-mono font-bold">-</p>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              ) : (
+                <div>
+                  <PerformanceMetrics metrics={mockMetrics} />
+                  <div className="mt-4 text-sm text-muted-foreground text-center">
+                    <p>No evaluated predictions yet. Make predictions and evaluate them to see real performance metrics.</p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <RiskDisclaimer />

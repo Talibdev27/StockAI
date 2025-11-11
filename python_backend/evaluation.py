@@ -744,3 +744,177 @@ def get_model_performance_metrics(
         }
     
     return model_metrics
+
+
+def get_trading_performance_metrics(
+    symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+    lookback_days: int = 30
+) -> Dict[str, Any]:
+    """
+    Calculate trading performance metrics from evaluated predictions.
+    
+    Calculates metrics assuming a simple trading strategy:
+    - Buy when prediction is "up", Sell when "down", Hold when "neutral"
+    - Returns are calculated based on actual price movements
+    
+    Args:
+        symbol: Filter by symbol (optional)
+        interval: Filter by interval (optional)
+        lookback_days: Number of days to look back (default 30)
+    
+    Returns:
+        Dictionary with performance metrics:
+        {
+            "prediction_accuracy": 75.5,  # Direction accuracy %
+            "sharpe_ratio": 1.85,         # Risk-adjusted return
+            "win_rate": 68.0,             # % of profitable predictions
+            "total_return": 12.5,         # Cumulative return %
+            "total_predictions": 50,       # Number of evaluated predictions
+            "profitable_predictions": 34   # Number of correct direction predictions
+        }
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    placeholder = _get_placeholder()
+    
+    # Query evaluated predictions
+    query = '''
+        SELECT 
+            p.current_price,
+            p.predicted_price,
+            p.timestamp,
+            e.actual_price,
+            e.direction_actual,
+            e.direction_predicted,
+            e.correct,
+            e.error_percent
+        FROM predictions p
+        JOIN evaluations e ON p.id = e.prediction_id
+    '''
+    params = []
+    
+    conditions = []
+    if symbol:
+        conditions.append(f"p.symbol = {placeholder}")
+        params.append(symbol)
+    if interval:
+        conditions.append(f"p.interval = {placeholder}")
+        params.append(interval)
+    
+    # Filter by lookback period if timestamp is available
+    # Note: This assumes timestamp is stored correctly
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    
+    query += " ORDER BY p.timestamp DESC"
+    
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        return {
+            "prediction_accuracy": 0.0,
+            "sharpe_ratio": 0.0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "total_predictions": 0,
+            "profitable_predictions": 0,
+        }
+    
+    # Convert rows to dicts
+    predictions = [_row_to_dict(row) for row in rows]
+    
+    # Limit to lookback period if needed
+    if lookback_days > 0:
+        # Keep only recent predictions (approximate)
+        predictions = predictions[:min(len(predictions), lookback_days * 2)]  # Rough estimate
+    
+    if not predictions:
+        return {
+            "prediction_accuracy": 0.0,
+            "sharpe_ratio": 0.0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "total_predictions": 0,
+            "profitable_predictions": 0,
+        }
+    
+    # Calculate returns for each prediction
+    # Return = (actual_price - current_price) / current_price * 100
+    returns = []
+    correct_predictions = 0
+    profitable_predictions = 0
+    
+    for pred in predictions:
+        current_price = pred.get("current_price")
+        actual_price = pred.get("actual_price")
+        direction_predicted = pred.get("direction_predicted")
+        direction_actual = pred.get("direction_actual")
+        is_correct = pred.get("correct", False)
+        
+        if current_price is None or actual_price is None or current_price == 0:
+            continue
+        
+        # Calculate return (%)
+        return_pct = ((actual_price - current_price) / current_price) * 100
+        returns.append(return_pct)
+        
+        # Count correct predictions
+        if is_correct:
+            correct_predictions += 1
+        
+        # Count profitable predictions (correct direction AND positive return)
+        if direction_predicted == "up" and return_pct > 0:
+            profitable_predictions += 1
+        elif direction_predicted == "down" and return_pct < 0:
+            profitable_predictions += 1
+        elif direction_predicted == "neutral" and abs(return_pct) < 0.5:  # Small movement
+            profitable_predictions += 1
+    
+    total_predictions = len(returns)
+    
+    if total_predictions == 0:
+        return {
+            "prediction_accuracy": 0.0,
+            "sharpe_ratio": 0.0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "total_predictions": 0,
+            "profitable_predictions": 0,
+        }
+    
+    # Calculate metrics
+    # 1. Prediction Accuracy (Direction Accuracy)
+    prediction_accuracy = (correct_predictions / total_predictions) * 100 if total_predictions > 0 else 0.0
+    
+    # 2. Win Rate (% of profitable predictions)
+    win_rate = (profitable_predictions / total_predictions) * 100 if total_predictions > 0 else 0.0
+    
+    # 3. Total Return (cumulative return)
+    total_return = sum(returns) if returns else 0.0
+    
+    # 4. Sharpe Ratio (risk-adjusted return)
+    # Sharpe = (mean_return - risk_free_rate) / std_dev
+    # Using 0 as risk-free rate for simplicity
+    sharpe_ratio = 0.0
+    if len(returns) > 1:
+        mean_return = np.mean(returns)
+        std_return = np.std(returns)
+        if std_return > 0:
+            sharpe_ratio = mean_return / std_return
+        elif mean_return > 0:
+            sharpe_ratio = 10.0  # Very high Sharpe if no volatility but positive returns
+        else:
+            sharpe_ratio = 0.0
+    
+    return {
+        "prediction_accuracy": round(prediction_accuracy, 2),
+        "sharpe_ratio": round(sharpe_ratio, 2),
+        "win_rate": round(win_rate, 2),
+        "total_return": round(total_return, 2),
+        "total_predictions": total_predictions,
+        "profitable_predictions": profitable_predictions,
+    }

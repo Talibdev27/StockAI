@@ -257,4 +257,31 @@ export function useEvaluation(symbol?: string, maxPredictions = 100) {
   });
 }
 
+export interface TradingPerformanceMetrics {
+  prediction_accuracy: number;
+  sharpe_ratio: number;
+  win_rate: number;
+  total_return: number;
+  total_predictions: number;
+  profitable_predictions: number;
+}
+
+export function useTradingPerformance(symbol?: string, interval?: string, lookbackDays = 30) {
+  return useQuery({
+    queryKey: ["trading-performance", symbol || "all", interval, lookbackDays],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        lookback_days: lookbackDays.toString(),
+      });
+      if (interval) params.append("interval", interval);
+      const url = symbol 
+        ? `/api/predictions/performance/${symbol}?${params}`
+        : `/api/predictions/performance?${params}`;
+      return apiGet<TradingPerformanceMetrics>(url);
+    },
+    enabled: true,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+}
+
 

@@ -10,7 +10,7 @@ import numpy as np
 from yahooquery import Ticker
 from models.ensemble import EnsembleModel
 from backtest import BacktestEngine
-from evaluation import save_prediction, evaluate_pending_predictions, get_prediction_history, get_prediction_stats
+from evaluation import save_prediction, evaluate_pending_predictions, get_prediction_history, get_prediction_stats, get_trading_performance_metrics
 
 # Technical indicators
 try:
@@ -699,6 +699,25 @@ def prediction_stats(symbol: str = None):
     except Exception as e:
         print(f"Stats error: {e}")
         return jsonify({"error": f"Failed to fetch stats: {str(e)}"}), 500
+
+
+@app.get("/api/predictions/performance")
+@app.get("/api/predictions/performance/<symbol>")
+def trading_performance(symbol: str = None):
+    """Get trading performance metrics from evaluated predictions."""
+    interval = request.args.get("interval", None)
+    lookback_days = int(request.args.get("lookback_days", 30))
+    
+    try:
+        metrics = get_trading_performance_metrics(
+            symbol=symbol,
+            interval=interval,
+            lookback_days=lookback_days
+        )
+        return jsonify(metrics)
+    except Exception as e:
+        print(f"Performance metrics error: {e}")
+        return jsonify({"error": f"Failed to fetch performance metrics: {str(e)}"}), 500
 
 
 @app.get("/api/health")
