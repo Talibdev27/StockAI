@@ -109,6 +109,8 @@ export default function PredictionHistory() {
       });
     }
   };
+  
+  const handleEvaluateAll = async () => {
     try {
       const result = await triggerBatchEvaluation();
       queryClient.invalidateQueries({ queryKey: ["prediction-history"] });
