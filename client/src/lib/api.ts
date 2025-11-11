@@ -66,6 +66,8 @@ export async function apiDelete<T>(path: string, init?: RequestInit): Promise<T>
     throw error;
   }
 }
+
+export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
   
   try {
