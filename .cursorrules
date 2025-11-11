@@ -1,0 +1,140 @@
+# StockVue Project Intelligence
+
+## Project Overview
+StockVue is an AI-powered stock prediction platform with a 7-model ensemble (Linear, LSTM, ARIMA, XGBoost, Decision Tree, SVM, Prophet) combining predictions for improved accuracy.
+
+## Architecture Pattern
+Three-tier: React Frontend → Node.js Express Gateway → Python Flask ML Backend
+- Frontend: React + TypeScript + Vite + Tailwind CSS
+- Middleware: Express.js API gateway, PostgreSQL (Neon) for user data
+- Backend: Flask ML service, SQLite for predictions
+
+## Key Patterns
+
+### Model Ensemble
+- 7 models total: 6 base + Prophet (optional)
+- Weighted voting based on confidence scores
+- Graceful degradation if optional models unavailable
+- Models stored in `python_backend/models_store/` with naming: `{SYMBOL}_{INTERVAL}_{MODEL}.{ext}`
+
+### Adaptive Configuration
+- Lag selection adapts to timeframe (intraday=20, daily=20, weekly=12, monthly=6)
+- LSTM hyperparameters configurable via environment variables
+- Model persistence prevents unnecessary retraining
+
+### Data Flow
+1. User selects stock + timeframe
+2. Frontend → Node.js → Flask backend
+3. Flask fetches Yahoo Finance data, trains/loads models, generates predictions
+4. Predictions saved to SQLite, returned to frontend
+5. Frontend displays on chart with technical indicators
+
+## Critical Paths
+
+### Model Initialization
+- Models loaded conditionally with try-except blocks
+- Feature flags: `_HAS_XGB`, `_HAS_DT`, `_HAS_SVM`, `_HAS_PROPHET`
+- Prophet requires C++ compilation (slow first install, fast after)
+
+### Prediction Generation
+- Check for cached models first
+- Train if missing or stale
+- Ensemble combines predictions with confidence weighting
+- Save prediction to `predictions.db` for accuracy tracking
+
+### Error Handling
+- Graceful degradation: system works with minimum models
+- Optional dependencies don't break functionality
+- User-friendly error messages in API responses
+
+## Development Workflow
+
+### Running the Application
+- Frontend + Node server: `npm run dev` (port 3000)
+- Python backend: `npm run dev:py` or `flask run -p 5001`
+- Both must run simultaneously for full functionality
+
+### Python Environment
+- Virtual environment: `python_backend/.venv`
+- Always activate before working: `source .venv/bin/activate`
+- Dependencies: `requirements.txt` with pinned versions
+
+### Model Verification
+```bash
+cd python_backend && source .venv/bin/activate
+python3 -c "from models.ensemble import EnsembleModel; e=EnsembleModel('1d'); print('Models:', list(e.models.keys()), 'Prophet:', e.prophet is not None)"
+```
+
+## Important Files
+
+### Core ML Code
+- `python_backend/models/ensemble.py` - Main ensemble orchestrator
+- `python_backend/app.py` - Flask API endpoints
+- `python_backend/models/*_model.py` - Individual model implementations
+
+### Frontend
+- `client/src/pages/Dashboard.tsx` - Main prediction interface
+- `client/src/hooks/useData.ts` - React Query hooks for API calls
+- `client/src/lib/api.ts` - API client functions
+
+### Configuration
+- `python_backend/requirements.txt` - Python dependencies
+- `package.json` - Node.js dependencies
+- `.env` - Environment variables (DATABASE_URL)
+
+## Known Issues & Solutions
+
+### Warnings (Non-Critical)
+- urllib3 OpenSSL warning: Ignore or downgrade urllib3
+- Plotly import failure: Optional, not used in production
+
+### Model Installation
+- Prophet: First install takes 5-10 minutes (C++ compilation)
+- XGBoost: Requires compatible compiler
+- All models verified working: 7/7 operational ✅
+
+## Code Style Preferences
+
+### Python
+- Type hints where helpful
+- Docstrings for public functions
+- Try-except for optional dependencies
+- Clear variable names
+
+### TypeScript/React
+- Functional components with hooks
+- TypeScript for type safety
+- React Query for server state
+- Tailwind CSS for styling
+- Radix UI for accessible components
+
+## Testing Approach
+- Model verification: Check ensemble initialization
+- Prediction testing: End-to-end flow validation
+- Accuracy tracking: Compare predictions vs actual prices
+- Backtesting: Validate strategy performance
+
+## Performance Considerations
+- Model caching: Avoids retraining (10-30s → 1-3s)
+- Data caching: TTL-based cache for API responses
+- First Prophet run: Slow (compilation), subsequent fast
+- Prediction latency: Target <30 seconds per stock
+
+## Future Enhancements
+- User authentication system
+- Pre-trained models for popular stocks
+- Additional technical indicators
+- Real-time WebSocket updates
+- Mobile app development
+
+## Memory Bank
+All project knowledge is maintained in `memory-bank/` directory:
+- `projectbrief.md` - Core requirements and goals
+- `productContext.md` - User experience and value proposition
+- `systemPatterns.md` - Architecture and design patterns
+- `techContext.md` - Technologies and setup
+- `activeContext.md` - Current work focus
+- `progress.md` - What works and what's left
+
+Always read memory bank files at the start of each session to understand project context.
+

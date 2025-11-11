@@ -4,3 +4,37 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment variables
+.env
+.local/
+
+# IDE
+.cursor/
+*.swp
+*.swo
+*~
+
+# Model files (large)
+*.h5
+*.pkl
+models_store/
+python_backend/models_store/
+python_backend/.venv/
+python_backend/*.db
+python_backend/*.db-shm
+python_backend/*.db-wal

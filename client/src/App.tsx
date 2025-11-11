@@ -6,15 +6,18 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import Header from "@/components/Header";
 import Dashboard from "@/pages/Dashboard";
+import Predictions from "@/pages/Predictions";
+import Backtest from "@/pages/Backtest";
+import About from "@/pages/About";
 import NotFound from "@/pages/not-found";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/predictions" component={Dashboard} />
-      <Route path="/backtest" component={Dashboard} />
-      <Route path="/about" component={Dashboard} />
+      <Route path="/predictions" component={Predictions} />
+      <Route path="/backtest" component={Backtest} />
+      <Route path="/about" component={About} />
       <Route component={NotFound} />
     </Switch>
   );

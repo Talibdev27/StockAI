@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import StockSelector from "@/components/StockSelector";
 import TimeframeSelector, { Timeframe } from "@/components/TimeframeSelector";
 import PriceChart from "@/components/PriceChart";
@@ -7,7 +7,10 @@ import TechnicalIndicators from "@/components/TechnicalIndicators";
 import PerformanceMetrics from "@/components/PerformanceMetrics";
 import Watchlist from "@/components/Watchlist";
 import RiskDisclaimer from "@/components/RiskDisclaimer";
-import { Activity, BarChart3, TrendingUp, Move, Gauge, Target, Award, DollarSign } from "lucide-react";
+import HelpSection from "@/components/HelpSection";
+import { Activity, BarChart3, TrendingUp, Move, Gauge, Target, Award, DollarSign, Loader2 } from "lucide-react";
+import { useHistorical, usePrediction, useQuote, useIndicators } from "@/hooks/useData";
+import PredictionAccuracy from "@/components/PredictionAccuracy";
 
 const stockPriceRanges: Record<string, { base: number; volatility: number }> = {
   AAPL: { base: 162, volatility: 5 },
@@ -51,47 +54,156 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
 
-  const mockChartData = generateChartData(selectedStock, timeframe);
+  // Map timeframe to API params
+  const timeframeMap: Record<Timeframe, { range: string; interval: string }> = {
+    "5m": { range: "60d", interval: "5m" },   // Yahoo max for 5m
+    "15m": { range: "60d", interval: "15m" }, // Yahoo max for 15m
+    "1H": { range: "730d", interval: "1h" },  // Yahoo max for 1h (~2y)
+    "4H": { range: "5d", interval: "4h" },
+    "1D": { range: "1y", interval: "1d" },
+    "1W": { range: "2y", interval: "1wk" },
+    "1M": { range: "5y", interval: "1mo" },
+  };
 
-  const mockIndicators = [
-    {
-      name: "RSI",
-      value: 62.5,
-      max: 100,
-      icon: <Activity className="h-5 w-5 text-primary" />,
-      description: "Relative Strength Index",
-    },
-    {
-      name: "MACD",
-      value: "+2.45",
-      icon: <TrendingUp className="h-5 w-5 text-primary" />,
-      description: "Moving Average Convergence",
-    },
-    {
-      name: "MA 50-Day",
-      value: "$158.23",
-      icon: <Move className="h-5 w-5 text-primary" />,
-      description: "50-Day Moving Average",
-    },
-    {
-      name: "MA 200-Day",
-      value: "$145.67",
-      icon: <Move className="h-5 w-5 text-primary" />,
-      description: "200-Day Moving Average",
-    },
-    {
-      name: "Volume",
-      value: "42.5M",
-      icon: <BarChart3 className="h-5 w-5 text-primary" />,
-      description: "Trading Volume",
-    },
-    {
-      name: "Bollinger Bands",
-      value: "$165.20",
-      icon: <Gauge className="h-5 w-5 text-primary" />,
-      description: "Upper Band Price",
-    },
-  ];
+  // Map timeframe to prediction horizon
+  const horizonMap: Record<Timeframe, number> = {
+    "5m": 60,   // Predict next 60 intervals (5 hours)
+    "15m": 48,  // Predict next 48 intervals (12 hours)
+    "1H": 24,   // Predict next 24 hours
+    "4H": 12,   // Predict next 48 hours (12 × 4h)
+    "1D": 5,    // Predict next 5 days
+    "1W": 4,    // Predict next 4 weeks
+    "1M": 3,    // Predict next 3 months
+  };
+
+  const { range, interval } = timeframeMap[timeframe];
+  const horizon = horizonMap[timeframe];
+  const { data: histData, isLoading: histLoading } = useHistorical(selectedStock, range, interval);
+  const { data: predData, isLoading: predLoading } = usePrediction(selectedStock, horizon, range, interval);
+  const { data: quoteData, isLoading: quoteLoading } = useQuote(selectedStock);
+  const { data: indicatorsData, isLoading: indicatorsLoading } = useIndicators(selectedStock, range, interval);
+
+  const chartData = useMemo(() => {
+    if (!histData || histData.length === 0) return [];
+    // Limit visible bars for intraday intervals to keep chart readable
+    const capByTimeframe: Partial<Record<Timeframe, number>> = {
+      "5m": 100,
+      "15m": 150,
+      "1H": 200,
+    };
+    const cap = capByTimeframe[timeframe as keyof typeof capByTimeframe];
+    const visible = cap ? histData.slice(-cap) : histData;
+
+    // Return OHLCV for chart + predictions (predictions not sliced)
+    const base = visible.map((d) => ({
+      date: d.date,
+      price: d.close,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+      volume: d.volume,
+    }));
+    const forecast = (predData?.forecast || []).map((v, i) => ({
+      date: `+${i + 1}`,
+      price: v,
+      predicted: true as const,
+    }));
+    return [...base, ...forecast];
+  }, [histData, predData]);
+
+  // Map API indicators to component format
+  const indicators = useMemo(() => {
+    if (!indicatorsData?.indicators) {
+      // Return empty array or fallback while loading
+      return [];
+    }
+
+    const ind = indicatorsData.indicators;
+    const result: Array<{
+      name: string;
+      value: number | string;
+      max?: number;
+      icon: React.ReactNode;
+      description: string;
+    }> = [];
+
+    // RSI
+    if (ind.rsi) {
+      const signalColor = 
+        ind.rsi.signal === "overbought" ? "text-red-500" :
+        ind.rsi.signal === "oversold" ? "text-green-500" : "text-primary";
+      result.push({
+        name: "RSI",
+        value: ind.rsi.value,
+        max: 100,
+        icon: <Activity className={`h-5 w-5 ${signalColor}`} />,
+        description: `Relative Strength Index (${ind.rsi.signal})`,
+      });
+    }
+
+    // MACD
+    if (ind.macd) {
+      const trendColor = 
+        ind.macd.trend === "bullish" ? "text-green-500" :
+        ind.macd.trend === "bearish" ? "text-red-500" : "text-primary";
+      const macdValue = ind.macd.histogram >= 0 ? `+${ind.macd.histogram.toFixed(4)}` : ind.macd.histogram.toFixed(4);
+      result.push({
+        name: "MACD",
+        value: macdValue,
+        icon: <TrendingUp className={`h-5 w-5 ${trendColor}`} />,
+        description: `Moving Average Convergence (${ind.macd.trend})`,
+      });
+    }
+
+    // Moving Averages
+    if (ind.movingAverages) {
+      const mas = ind.movingAverages;
+      // Show available MAs (prioritize 50 and 200 for daily, or shorter for intraday)
+      const maKeys = Object.keys(mas).sort((a, b) => {
+        const aNum = parseInt(a.replace("sma", ""));
+        const bNum = parseInt(b.replace("sma", ""));
+        return aNum - bNum;
+      });
+
+      for (const key of maKeys) {
+        const period = key.replace("sma", "");
+        result.push({
+          name: `MA ${period}-Period`,
+          value: `$${mas[key].toFixed(2)}`,
+          icon: <Move className="h-5 w-5 text-primary" />,
+          description: `${period}-Period Simple Moving Average`,
+        });
+      }
+    }
+
+    // Bollinger Bands
+    if (ind.bollingerBands) {
+      const posLabel = 
+        ind.bollingerBands.position === "upper" ? "Near Upper Band" :
+        ind.bollingerBands.position === "lower" ? "Near Lower Band" : "Middle Band";
+      result.push({
+        name: "Bollinger Bands",
+        value: `$${ind.bollingerBands.upper.toFixed(2)}`,
+        icon: <Gauge className="h-5 w-5 text-primary" />,
+        description: `Upper Band (${posLabel}, Width: ${ind.bollingerBands.width.toFixed(2)}%)`,
+      });
+    }
+
+    // Volume
+    if (ind.volume) {
+      const volumeM = (ind.volume.current / 1_000_000).toFixed(1);
+      const avgVolumeM = (ind.volume.average / 1_000_000).toFixed(1);
+      result.push({
+        name: "Volume",
+        value: `${volumeM}M`,
+        icon: <BarChart3 className="h-5 w-5 text-primary" />,
+        description: `Trading Volume (Avg: ${avgVolumeM}M, Ratio: ${ind.volume.ratio.toFixed(2)}x)`,
+      });
+    }
+
+    return result;
+  }, [indicatorsData]);
 
   const mockMetrics = [
     {
@@ -165,6 +277,27 @@ export default function Dashboard() {
               />
             </div>
 
+            <HelpSection title="How It Works">
+              <div className="space-y-3">
+                <div>
+                  <p className="font-medium mb-1">1. Select a Stock and Timeframe</p>
+                  <p>Use the search bar above to find a stock by symbol (e.g., AAPL) or company name. Choose your preferred timeframe (5m, 15m, 1H, 1D, 1W, 1M) to view historical data and predictions.</p>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">2. Making Predictions</p>
+                  <p>Predictions are automatically generated when you view a stock. The system uses an ensemble of AI models (LSTM, XGBoost, ARIMA, etc.) to forecast future prices. Each prediction is automatically saved to the database.</p>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">3. Understanding Results</p>
+                  <p>The <strong>Prediction Summary</strong> shows the predicted price, confidence level, and trading signal (BUY/SELL/HOLD). The <strong>Price Chart</strong> displays historical data with predicted future prices in blue. <strong>Technical Indicators</strong> provide additional market insights.</p>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">4. Next Steps</p>
+                  <p>After making predictions, go to the <strong>Prediction History</strong> page to evaluate how accurate your predictions were by comparing them with actual market prices.</p>
+                </div>
+              </div>
+            </HelpSection>
+
             <StockSelector
               selectedStock={selectedStock}
               onSelectStock={setSelectedStock}
@@ -174,25 +307,49 @@ export default function Dashboard() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2">
-                <PriceChart
-                  symbol={selectedStock}
-                  timeframe={timeframe}
-                  data={mockChartData}
+                <PriceChart 
+                  symbol={selectedStock} 
+                  timeframe={timeframe} 
+                  data={chartData}
+                  liveQuote={quoteData ? { price: quoteData.price, previousClose: quoteData.previousClose } : undefined}
                 />
               </div>
               <div>
                 <PredictionSummary
-                  currentPrice={162.45}
-                  predictedPrice={168.32}
-                  confidence={85}
-                  signal="BUY"
+                  currentPrice={quoteData?.price ?? histData?.at(-1)?.close ?? 0}
+                  predictedPrice={predData?.predictedPrice ?? 0}
+                  confidence={predData?.confidence ?? 0}
+                  signal={
+                    (predData?.predictedPrice ?? 0) > (quoteData?.price ?? histData?.at(-1)?.close ?? 0)
+                      ? "BUY"
+                      : (predData?.predictedPrice ?? 0) < (quoteData?.price ?? histData?.at(-1)?.close ?? 0)
+                      ? "SELL"
+                      : "HOLD"
+                  }
+                  models={predData?.models}
                 />
               </div>
             </div>
 
             <div>
-              <h2 className="text-xl font-semibold mb-4">Technical Indicators</h2>
-              <TechnicalIndicators indicators={mockIndicators} />
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold">Technical Indicators</h2>
+                {indicatorsLoading && (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                )}
+              </div>
+              {indicators.length > 0 ? (
+                <TechnicalIndicators indicators={indicators} />
+              ) : indicatorsLoading ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                  <p>Loading indicators...</p>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <p>No indicators available</p>
+                </div>
+              )}
             </div>
 
             <div>
@@ -203,7 +360,8 @@ export default function Dashboard() {
             <RiskDisclaimer />
           </div>
 
-          <div className="lg:w-80">
+          <div className="lg:w-80 space-y-6">
+            <PredictionAccuracy symbol={selectedStock} interval={interval} />
             <Watchlist
               stocks={mockWatchlist}
               onRemove={(symbol) => console.log("Remove:", symbol)}

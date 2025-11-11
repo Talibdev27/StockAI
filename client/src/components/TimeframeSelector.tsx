@@ -1,13 +1,13 @@
 import { Button } from "@/components/ui/button";
 
-export type Timeframe = "1H" | "4H" | "1D" | "1W" | "1M";
+export type Timeframe = "5m" | "15m" | "1H" | "4H" | "1D" | "1W" | "1M";
 
 interface TimeframeSelectorProps {
   selectedTimeframe: Timeframe;
   onSelectTimeframe: (timeframe: Timeframe) => void;
 }
 
-const timeframes: Timeframe[] = ["1H", "4H", "1D", "1W", "1M"];
+const timeframes: Timeframe[] = ["5m", "15m", "1H", "4H", "1D", "1W", "1M"];
 
 export default function TimeframeSelector({
   selectedTimeframe,
