@@ -7,7 +7,7 @@ Uses DATABASE_URL environment variable to determine which database to use.
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
@@ -47,6 +47,78 @@ def get_db_connection():
 def _get_placeholder():
     """Get placeholder for parameterized queries."""
     return "%s" if USE_POSTGRES else "?"
+
+
+# Interval duration mapping for evaluation timing
+INTERVAL_DURATIONS = {
+    "5m": timedelta(minutes=5),
+    "15m": timedelta(minutes=15),
+    "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4),
+    "1d": timedelta(days=1),
+    "1wk": timedelta(weeks=1),
+    "1mo": timedelta(days=30),  # Approximate month
+}
+
+
+def get_interval_duration(interval: str) -> timedelta:
+    """
+    Get the time duration for a given interval.
+    
+    Args:
+        interval: Interval string (e.g., "1d", "1h", "15m")
+    
+    Returns:
+        timedelta representing the duration
+    """
+    return INTERVAL_DURATIONS.get(interval, timedelta(days=1))  # Default to 1 day
+
+
+def is_prediction_ready_for_evaluation(prediction: Dict[str, Any]) -> bool:
+    """
+    Check if a prediction is ready for evaluation based on its timestamp and interval.
+    
+    A prediction is ready if enough time has passed since it was made.
+    For example, a "1d" prediction should only be evaluated after 1 day has passed.
+    
+    Args:
+        prediction: Dictionary containing prediction data with 'timestamp' and 'interval' keys
+    
+    Returns:
+        True if prediction is ready for evaluation, False otherwise
+    """
+    timestamp = prediction.get("timestamp")
+    interval = prediction.get("interval")
+    
+    if not timestamp or not interval:
+        return False
+    
+    # Parse timestamp if it's a string
+    if isinstance(timestamp, str):
+        try:
+            timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            try:
+                timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return False
+    
+    # Get the duration for this interval
+    duration = get_interval_duration(interval)
+    
+    # Calculate when this prediction should be evaluated
+    evaluation_time = timestamp + duration
+    
+    # Check if enough time has passed
+    now = datetime.now()
+    
+    # Handle timezone-aware timestamps
+    if timestamp.tzinfo is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=timestamp.tzinfo)
+    elif timestamp.tzinfo is None and now.tzinfo is not None:
+        timestamp = timestamp.replace(tzinfo=now.tzinfo)
+    
+    return evaluation_time <= now
 
 
 def _row_to_dict(row):
@@ -311,6 +383,9 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
     """
     Evaluate pending predictions by fetching actual prices.
     
+    Only evaluates predictions where enough time has passed based on their interval.
+    For example, a "1d" prediction will only be evaluated after 1 day has passed.
+    
     Args:
         symbol: If provided, only evaluate predictions for this symbol
         max_predictions: Maximum number of predictions to evaluate
@@ -376,38 +451,103 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
                 "message": "No pending predictions to evaluate"
             }
     
-    evaluated_count = 0
-    error_count = 0
-    
-    # Group by symbol for batch fetching
-    symbols_to_fetch = list(set([p["symbol"] for p in predictions]))
-    
-    # Fetch current prices for all symbols
-    ticker = Ticker(symbols_to_fetch)
-    quotes = ticker.price
+    # Filter predictions by time eligibility
+    ready_predictions = []
+    not_ready_predictions = []
     
     for pred in predictions:
+        if is_prediction_ready_for_evaluation(pred):
+            ready_predictions.append(pred)
+        else:
+            not_ready_predictions.append(pred)
+    
+    if not ready_predictions:
+        interval_counts = {}
+        for pred in not_ready_predictions:
+            interval = pred.get("interval", "unknown")
+            interval_counts[interval] = interval_counts.get(interval, 0) + 1
+        
+        interval_msg = ", ".join([f"{count} {interval}" for interval, count in interval_counts.items()])
+        
+        return {
+            "evaluated": 0,
+            "errors": 0,
+            "total": len(predictions),
+            "ready": 0,
+            "not_ready": len(not_ready_predictions),
+            "message": f"No predictions are ready for evaluation yet. {len(not_ready_predictions)} prediction(s) pending ({interval_msg}). Predictions will be ready after their prediction horizon has passed."
+        }
+    
+    evaluated_count = 0
+    error_count = 0
+    skipped_count = 0
+    
+    # Group ready predictions by symbol for batch processing
+    symbols_to_fetch = list(set([p["symbol"] for p in ready_predictions]))
+    
+    # Process each ready prediction
+    for pred in ready_predictions:
         try:
             symbol = pred["symbol"]
-            quote_data = quotes.get(symbol, {})
-            actual_price = quote_data.get("regularMarketPrice")
+            interval = pred.get("interval", "1d")
+            timestamp = pred.get("timestamp")
+            
+            # Parse timestamp
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                except (ValueError, AttributeError):
+                    try:
+                        timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        error_count += 1
+                        continue
+            
+            # Calculate the evaluation time (when the prediction should be evaluated)
+            duration = get_interval_duration(interval)
+            evaluation_time = timestamp + duration
+            
+            # Fetch historical price at the evaluation time
+            actual_price = fetch_historical_price_at_time(symbol, evaluation_time, interval)
             
             if actual_price is None:
-                continue
+                # If we can't get historical price, try current price as fallback
+                # but only if evaluation_time is very recent (within last hour)
+                now = datetime.now()
+                if timestamp.tzinfo is not None and now.tzinfo is None:
+                    now = now.replace(tzinfo=timestamp.tzinfo)
+                elif timestamp.tzinfo is None and now.tzinfo is not None:
+                    timestamp = timestamp.replace(tzinfo=now.tzinfo)
+                
+                time_since_eval = now - evaluation_time
+                if time_since_eval <= timedelta(hours=1):
+                    # Fallback to current price if evaluation was very recent
+                    ticker = Ticker(symbol)
+                    quotes = ticker.price
+                    quote_data = quotes.get(symbol, {})
+                    actual_price = quote_data.get("regularMarketPrice")
+                
+                if actual_price is None:
+                    skipped_count += 1
+                    print(f"Could not fetch price for {symbol} at evaluation time {evaluation_time}")
+                    continue
             
-            # For horizon > 1, we'd need historical data, but for now evaluate as if horizon=1
-            # TODO: For multi-period predictions, fetch historical price at the predicted time
+            # Evaluate the prediction with the correct historical price
             evaluate_prediction(pred["id"], float(actual_price))
             evaluated_count += 1
             
         except Exception as e:
-            print(f"Error evaluating prediction {pred['id']}: {e}")
+            print(f"Error evaluating prediction {pred.get('id', 'unknown')}: {e}")
             error_count += 1
     
     return {
         "evaluated": evaluated_count,
         "errors": error_count,
-        "total": len(predictions)
+        "total": len(predictions),
+        "ready": len(ready_predictions),
+        "not_ready": len(not_ready_predictions),
+        "skipped": skipped_count,
+        "message": f"Evaluated {evaluated_count} prediction(s). {len(not_ready_predictions)} prediction(s) not yet ready (waiting for prediction horizon to pass)."
     }
 
 
