@@ -134,6 +134,8 @@ export default function PredictionHistory() {
       setDeleting(false);
     }
   };
+
+  const handleRefresh = async () => {
     try {
       await refetchHistory();
       // Also refresh stats
@@ -151,7 +153,7 @@ export default function PredictionHistory() {
       });
     }
   };
-  
+
   const handleEvaluateAll = async () => {
     try {
       const result = await triggerBatchEvaluation();
