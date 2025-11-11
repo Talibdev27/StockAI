@@ -1,8 +1,10 @@
 """
 Prediction tracking and evaluation system.
 Stores predictions, compares with actual prices, and calculates accuracy metrics.
+
+Supports both PostgreSQL (production) and SQLite (local development).
+Uses DATABASE_URL environment variable to determine which database to use.
 """
-import sqlite3
 import json
 import os
 from datetime import datetime
@@ -11,15 +13,48 @@ import pandas as pd
 import numpy as np
 from yahooquery import Ticker
 
+# Database connection setup
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith("postgres")
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "predictions.db")
+if USE_POSTGRES:
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor, execute_values
+        print("Using PostgreSQL database")
+    except ImportError:
+        print("Warning: psycopg2 not installed, falling back to SQLite")
+        USE_POSTGRES = False
+        import sqlite3
+        DB_PATH = os.path.join(os.path.dirname(__file__), "predictions.db")
+else:
+    import sqlite3
+    DB_PATH = os.path.join(os.path.dirname(__file__), "predictions.db")
+    print("Using SQLite database (local development)")
 
 
 def get_db_connection():
-    """Get SQLite database connection."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # Return rows as dictionaries
-    return conn
+    """Get database connection (PostgreSQL or SQLite)."""
+    if USE_POSTGRES:
+        conn = psycopg2.connect(DATABASE_URL)
+        return conn
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+
+def _get_placeholder():
+    """Get placeholder for parameterized queries."""
+    return "%s" if USE_POSTGRES else "?"
+
+
+def _row_to_dict(row):
+    """Convert database row to dictionary."""
+    if USE_POSTGRES:
+        return dict(row)
+    else:
+        return dict(row)
 
 
 def init_db():
@@ -27,45 +62,88 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Predictions table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            timestamp DATETIME NOT NULL,
-            interval TEXT NOT NULL,
-            horizon INTEGER NOT NULL,
-            current_price REAL NOT NULL,
-            predicted_price REAL NOT NULL,
-            confidence REAL NOT NULL,
-            model_breakdown TEXT,
-            actual_price REAL,
-            evaluated BOOLEAN DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Evaluations table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS evaluations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prediction_id INTEGER NOT NULL,
-            actual_price REAL NOT NULL,
-            error REAL NOT NULL,
-            error_percent REAL NOT NULL,
-            direction_actual TEXT NOT NULL,
-            direction_predicted TEXT NOT NULL,
-            correct BOOLEAN NOT NULL,
-            evaluated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (prediction_id) REFERENCES predictions(id)
-        )
-    ''')
+    if USE_POSTGRES:
+        # PostgreSQL schema
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS predictions (
+                id SERIAL PRIMARY KEY,
+                symbol VARCHAR(10) NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                interval VARCHAR(10) NOT NULL,
+                horizon INTEGER NOT NULL,
+                current_price DOUBLE PRECISION NOT NULL,
+                predicted_price DOUBLE PRECISION NOT NULL,
+                confidence DOUBLE PRECISION NOT NULL,
+                model_breakdown TEXT,
+                actual_price DOUBLE PRECISION,
+                evaluated BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id SERIAL PRIMARY KEY,
+                prediction_id INTEGER NOT NULL,
+                actual_price DOUBLE PRECISION NOT NULL,
+                error DOUBLE PRECISION NOT NULL,
+                error_percent DOUBLE PRECISION NOT NULL,
+                direction_actual VARCHAR(10) NOT NULL,
+                direction_predicted VARCHAR(10) NOT NULL,
+                correct BOOLEAN NOT NULL,
+                evaluated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (prediction_id) REFERENCES predictions(id) ON DELETE CASCADE
+            )
+        ''')
+    else:
+        # SQLite schema
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS predictions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                timestamp DATETIME NOT NULL,
+                interval TEXT NOT NULL,
+                horizon INTEGER NOT NULL,
+                current_price REAL NOT NULL,
+                predicted_price REAL NOT NULL,
+                confidence REAL NOT NULL,
+                model_breakdown TEXT,
+                actual_price REAL,
+                evaluated BOOLEAN DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                prediction_id INTEGER NOT NULL,
+                actual_price REAL NOT NULL,
+                error REAL NOT NULL,
+                error_percent REAL NOT NULL,
+                direction_actual TEXT NOT NULL,
+                direction_predicted TEXT NOT NULL,
+                correct BOOLEAN NOT NULL,
+                evaluated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (prediction_id) REFERENCES predictions(id)
+            )
+        ''')
     
     # Create indexes for performance
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_predictions_timestamp ON predictions(timestamp)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_predictions_evaluated ON predictions(evaluated)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_evaluations_prediction_id ON evaluations(prediction_id)')
+    placeholder = _get_placeholder()
+    
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol)",
+        "CREATE INDEX IF NOT EXISTS idx_predictions_timestamp ON predictions(timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_predictions_evaluated ON predictions(evaluated)",
+        "CREATE INDEX IF NOT EXISTS idx_evaluations_prediction_id ON evaluations(prediction_id)",
+    ]
+    
+    for index_sql in indexes:
+        try:
+            cursor.execute(index_sql)
+        except Exception as e:
+            print(f"Warning: Could not create index: {e}")
     
     conn.commit()
     conn.close()
@@ -91,23 +169,42 @@ def save_prediction(
     cursor = conn.cursor()
     
     model_breakdown_json = json.dumps(model_breakdown) if model_breakdown else None
+    placeholder = _get_placeholder()
     
-    cursor.execute('''
-        INSERT INTO predictions 
-        (symbol, timestamp, interval, horizon, current_price, predicted_price, confidence, model_breakdown, evaluated)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-    ''', (
-        symbol,
-        datetime.utcnow().isoformat(),
-        interval,
-        horizon,
-        current_price,
-        predicted_price,
-        confidence,
-        model_breakdown_json,
-    ))
+    if USE_POSTGRES:
+        cursor.execute(f'''
+            INSERT INTO predictions 
+            (symbol, timestamp, interval, horizon, current_price, predicted_price, confidence, model_breakdown, evaluated)
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, FALSE)
+            RETURNING id
+        ''', (
+            symbol,
+            datetime.utcnow(),
+            interval,
+            horizon,
+            current_price,
+            predicted_price,
+            confidence,
+            model_breakdown_json,
+        ))
+        prediction_id = cursor.fetchone()[0]
+    else:
+        cursor.execute(f'''
+            INSERT INTO predictions 
+            (symbol, timestamp, interval, horizon, current_price, predicted_price, confidence, model_breakdown, evaluated)
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 0)
+        ''', (
+            symbol,
+            datetime.utcnow().isoformat(),
+            interval,
+            horizon,
+            current_price,
+            predicted_price,
+            confidence,
+            model_breakdown_json,
+        ))
+        prediction_id = cursor.lastrowid
     
-    prediction_id = cursor.lastrowid
     conn.commit()
     conn.close()
     
@@ -148,13 +245,17 @@ def evaluate_prediction(prediction_id: int, actual_price: float) -> Dict[str, An
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Get prediction
-    cursor.execute('SELECT * FROM predictions WHERE id = ?', (prediction_id,))
-    pred = cursor.fetchone()
+    placeholder = _get_placeholder()
     
-    if not pred:
+    # Get prediction
+    cursor.execute(f'SELECT * FROM predictions WHERE id = {placeholder}', (prediction_id,))
+    pred_row = cursor.fetchone()
+    
+    if not pred_row:
         conn.close()
         raise ValueError(f"Prediction {prediction_id} not found")
+    
+    pred = _row_to_dict(pred_row)
     
     current_price = pred["current_price"]
     predicted_price = pred["predicted_price"]
@@ -170,10 +271,10 @@ def evaluate_prediction(prediction_id: int, actual_price: float) -> Dict[str, An
     correct = predicted_dir == actual_dir
     
     # Save evaluation
-    cursor.execute('''
+    cursor.execute(f'''
         INSERT INTO evaluations 
         (prediction_id, actual_price, error, error_percent, direction_actual, direction_predicted, correct)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
     ''', (
         prediction_id,
         actual_price,
@@ -185,11 +286,12 @@ def evaluate_prediction(prediction_id: int, actual_price: float) -> Dict[str, An
     ))
     
     # Update prediction
-    cursor.execute('''
+    evaluated_value = True if USE_POSTGRES else 1
+    cursor.execute(f'''
         UPDATE predictions 
-        SET actual_price = ?, evaluated = 1
-        WHERE id = ?
-    ''', (actual_price, prediction_id))
+        SET actual_price = {placeholder}, evaluated = {placeholder}
+        WHERE id = {placeholder}
+    ''', (actual_price, evaluated_value, prediction_id))
     
     conn.commit()
     conn.close()
@@ -219,27 +321,31 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    placeholder = _get_placeholder()
+    evaluated_value = False if USE_POSTGRES else 0
+    
     # Get pending predictions
     if symbol:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT * FROM predictions 
-            WHERE evaluated = 0 AND symbol = ?
+            WHERE evaluated = {placeholder} AND symbol = {placeholder}
             ORDER BY timestamp DESC
-            LIMIT ?
-        ''', (symbol, max_predictions))
+            LIMIT {placeholder}
+        ''', (evaluated_value, symbol, max_predictions))
     else:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT * FROM predictions 
-            WHERE evaluated = 0
+            WHERE evaluated = {placeholder}
             ORDER BY timestamp DESC
-            LIMIT ?
-        ''', (max_predictions,))
+            LIMIT {placeholder}
+        ''', (evaluated_value, max_predictions))
     
-    predictions = cursor.fetchall()
+    pred_rows = cursor.fetchall()
+    predictions = [_row_to_dict(row) for row in pred_rows]
     
     # Check if there are any predictions at all for this symbol
     if symbol:
-        cursor.execute('SELECT COUNT(*) FROM predictions WHERE symbol = ?', (symbol,))
+        cursor.execute(f'SELECT COUNT(*) FROM predictions WHERE symbol = {placeholder}', (symbol,))
         total_count = cursor.fetchone()[0]
     else:
         cursor.execute('SELECT COUNT(*) FROM predictions')
@@ -319,6 +425,8 @@ def get_prediction_stats(symbol: Optional[str] = None, interval: Optional[str] =
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    placeholder = _get_placeholder()
+    
     # Build query
     query = '''
         SELECT 
@@ -336,10 +444,10 @@ def get_prediction_stats(symbol: Optional[str] = None, interval: Optional[str] =
     
     conditions = []
     if symbol:
-        conditions.append("p.symbol = ?")
+        conditions.append(f"p.symbol = {placeholder}")
         params.append(symbol)
     if interval:
-        conditions.append("p.interval = ?")
+        conditions.append(f"p.interval = {placeholder}")
         params.append(interval)
     
     if conditions:
@@ -359,13 +467,16 @@ def get_prediction_stats(symbol: Optional[str] = None, interval: Optional[str] =
             "mae": 0,
         }
     
+    # Convert rows to dicts
+    rows_dict = [_row_to_dict(row) for row in rows]
+    
     # Calculate statistics
-    total = len(rows)
-    correct_directions = sum(1 for row in rows if row["correct"])
+    total = len(rows_dict)
+    correct_directions = sum(1 for row in rows_dict if row["correct"])
     direction_accuracy = (correct_directions / total) * 100 if total > 0 else 0
     
-    errors = [row["error"] for row in rows]
-    error_percents = [row["error_percent"] for row in rows]
+    errors = [row["error"] for row in rows_dict]
+    error_percents = [row["error_percent"] for row in rows_dict]
     
     avg_error = np.mean(errors) if errors else 0
     avg_error_percent = np.mean(error_percents) if error_percents else 0
@@ -403,6 +514,8 @@ def get_prediction_history(
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    placeholder = _get_placeholder()
+    
     query = '''
         SELECT 
             p.*,
@@ -420,16 +533,16 @@ def get_prediction_history(
     
     conditions = []
     if symbol:
-        conditions.append("p.symbol = ?")
+        conditions.append(f"p.symbol = {placeholder}")
         params.append(symbol)
     if interval:
-        conditions.append("p.interval = ?")
+        conditions.append(f"p.interval = {placeholder}")
         params.append(interval)
     
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     
-    query += " ORDER BY p.timestamp DESC LIMIT ? OFFSET ?"
+    query += f" ORDER BY p.timestamp DESC LIMIT {placeholder} OFFSET {placeholder}"
     params.extend([limit, offset])
     
     cursor.execute(query, params)
@@ -439,34 +552,36 @@ def get_prediction_history(
     # Convert to dictionaries
     results = []
     for row in rows:
+        row_dict = _row_to_dict(row)
         result = {
-            "id": row["id"],
-            "symbol": row["symbol"],
-            "timestamp": row["timestamp"],
-            "interval": row["interval"],
-            "horizon": row["horizon"],
-            "current_price": row["current_price"],
-            "predicted_price": row["predicted_price"],
-            "confidence": row["confidence"],
-            "evaluated": bool(row["evaluated"]),
+            "id": row_dict["id"],
+            "symbol": row_dict["symbol"],
+            "timestamp": row_dict["timestamp"].isoformat() if hasattr(row_dict["timestamp"], "isoformat") else str(row_dict["timestamp"]),
+            "interval": row_dict["interval"],
+            "horizon": row_dict["horizon"],
+            "current_price": row_dict["current_price"],
+            "predicted_price": row_dict["predicted_price"],
+            "confidence": row_dict["confidence"],
+            "evaluated": bool(row_dict["evaluated"]),
         }
         
-        if row["model_breakdown"]:
+        if row_dict["model_breakdown"]:
             try:
-                result["model_breakdown"] = json.loads(row["model_breakdown"])
+                result["model_breakdown"] = json.loads(row_dict["model_breakdown"])
             except:
                 result["model_breakdown"] = None
         
-        if row["actual_price"] is not None:
-            result["actual_price"] = row["actual_price"]
-            result["error"] = row["error"]
-            result["error_percent"] = row["error_percent"]
-            result["direction_actual"] = row["direction_actual"]
-            result["direction_predicted"] = row["direction_predicted"]
-            result["correct"] = bool(row["correct"])
-            result["evaluated_at"] = row["evaluated_at"]
+        if row_dict.get("actual_price") is not None:
+            result["actual_price"] = row_dict["actual_price"]
+            result["error"] = row_dict["error"]
+            result["error_percent"] = row_dict["error_percent"]
+            result["direction_actual"] = row_dict["direction_actual"]
+            result["direction_predicted"] = row_dict["direction_predicted"]
+            result["correct"] = bool(row_dict["correct"])
+            evaluated_at = row_dict.get("evaluated_at")
+            if evaluated_at:
+                result["evaluated_at"] = evaluated_at.isoformat() if hasattr(evaluated_at, "isoformat") else str(evaluated_at)
         
         results.append(result)
     
     return results
-
