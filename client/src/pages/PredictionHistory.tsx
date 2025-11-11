@@ -29,6 +29,7 @@ export default function PredictionHistory() {
   const [viewMode, setViewMode] = useState<"single" | "all">("single");
   const [searchQuery, setSearchQuery] = useState("");
   const [interval, setInterval] = useState<string>("all");
+  const [limit, setLimit] = useState(100);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [predictionToDelete, setPredictionToDelete] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
