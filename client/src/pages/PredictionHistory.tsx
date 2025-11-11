@@ -410,7 +410,7 @@ export default function PredictionHistory() {
                         </TableCell>
                         <TableCell>
                           <Badge variant="secondary">
-                            {(item.confidence * 100).toFixed(1)}%
+                            {item.confidence.toFixed(1)}%
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -499,7 +499,7 @@ export default function PredictionHistory() {
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">
-                          {(item.confidence * 100).toFixed(1)}%
+                          {item.confidence.toFixed(1)}%
                         </Badge>
                       </TableCell>
                       <TableCell>
