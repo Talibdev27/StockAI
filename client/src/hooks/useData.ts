@@ -1,6 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "@/lib/api";
 
+export function useBackendHealth() {
+  return useQuery({
+    queryKey: ["backend-health"],
+    queryFn: () => apiGet<{ status: string; service: string; version: string }>("/api/health"),
+    retry: 1,
+    retryDelay: 2000,
+    refetchInterval: 30000, // Check every 30 seconds
+    staleTime: 1000 * 10, // 10 seconds
+  });
+}
+
 export function useStocks() {
   return useQuery({
     queryKey: ["stocks"],

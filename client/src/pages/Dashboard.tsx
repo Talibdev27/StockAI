@@ -8,9 +8,10 @@ import PerformanceMetrics from "@/components/PerformanceMetrics";
 import Watchlist from "@/components/Watchlist";
 import RiskDisclaimer from "@/components/RiskDisclaimer";
 import HelpSection from "@/components/HelpSection";
-import { Activity, BarChart3, TrendingUp, Move, Gauge, Target, Award, DollarSign, Loader2 } from "lucide-react";
-import { useHistorical, usePrediction, useQuote, useIndicators } from "@/hooks/useData";
+import { Activity, BarChart3, TrendingUp, Move, Gauge, Target, Award, DollarSign, Loader2, AlertCircle, CheckCircle2, XCircle } from "lucide-react";
+import { useHistorical, usePrediction, useQuote, useIndicators, useBackendHealth } from "@/hooks/useData";
 import PredictionAccuracy from "@/components/PredictionAccuracy";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const stockPriceRanges: Record<string, { base: number; volatility: number }> = {
   AAPL: { base: 162, volatility: 5 },
@@ -78,10 +79,11 @@ export default function Dashboard() {
 
   const { range, interval } = timeframeMap[timeframe];
   const horizon = horizonMap[timeframe];
-  const { data: histData, isLoading: histLoading } = useHistorical(selectedStock, range, interval);
-  const { data: predData, isLoading: predLoading } = usePrediction(selectedStock, horizon, range, interval);
-  const { data: quoteData, isLoading: quoteLoading } = useQuote(selectedStock);
-  const { data: indicatorsData, isLoading: indicatorsLoading } = useIndicators(selectedStock, range, interval);
+  const { data: histData, isLoading: histLoading, error: histError } = useHistorical(selectedStock, range, interval);
+  const { data: predData, isLoading: predLoading, error: predError } = usePrediction(selectedStock, horizon, range, interval);
+  const { data: quoteData, isLoading: quoteLoading, error: quoteError } = useQuote(selectedStock);
+  const { data: indicatorsData, isLoading: indicatorsLoading, error: indicatorsError } = useIndicators(selectedStock, range, interval);
+  const { data: healthData, error: healthError } = useBackendHealth();
 
   const chartData = useMemo(() => {
     if (!histData || histData.length === 0) return [];
@@ -297,6 +299,60 @@ export default function Dashboard() {
                 </div>
               </div>
             </HelpSection>
+
+            {/* Backend Connection Status */}
+            {healthError && (
+              <Alert variant="destructive">
+                <XCircle className="h-4 w-4" />
+                <AlertTitle>Backend Connection Failed</AlertTitle>
+                <AlertDescription>
+                  Cannot connect to the backend API. Please check:
+                  <ul className="list-disc list-inside mt-2 space-y-1">
+                    <li>Is the Railway backend service running?</li>
+                    <li>Is VITE_API_BASE set correctly in Vercel environment variables?</li>
+                    <li>Check Railway logs for backend errors</li>
+                  </ul>
+                  <div className="mt-2 text-xs">
+                    Error: {healthError instanceof Error ? healthError.message : "Unknown error"}
+                  </div>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {healthData && !healthError && (
+              <Alert className="border-green-500/50 bg-green-500/10">
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <AlertTitle className="text-green-500">Backend Connected</AlertTitle>
+                <AlertDescription className="text-green-500/80">
+                  {healthData.service} v{healthData.version} is running
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* API Error Messages */}
+            {(quoteError || histError || predError) && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Data Loading Error</AlertTitle>
+                <AlertDescription>
+                  {quoteError && (
+                    <div className="mb-2">
+                      <strong>Quote Error:</strong> {quoteError instanceof Error ? quoteError.message : "Failed to load current price"}
+                    </div>
+                  )}
+                  {histError && (
+                    <div className="mb-2">
+                      <strong>Historical Data Error:</strong> {histError instanceof Error ? histError.message : "Failed to load historical data"}
+                    </div>
+                  )}
+                  {predError && (
+                    <div>
+                      <strong>Prediction Error:</strong> {predError instanceof Error ? predError.message : "Failed to generate prediction"}
+                    </div>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
 
             <StockSelector
               selectedStock={selectedStock}

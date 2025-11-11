@@ -701,6 +701,16 @@ def prediction_stats(symbol: str = None):
         return jsonify({"error": f"Failed to fetch stats: {str(e)}"}), 500
 
 
+@app.get("/api/health")
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "ok",
+        "service": "StockVue ML Backend",
+        "version": "1.0.0"
+    })
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5001"))
     app.run(host="0.0.0.0", port=port, debug=True)
