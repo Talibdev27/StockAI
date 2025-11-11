@@ -2,7 +2,9 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 
-const PYTHON_API_BASE = process.env.PYTHON_API_BASE || "http://localhost:5001";
+// In production, if PYTHON_API_BASE is not set, assume Python backend runs on same host
+const PYTHON_API_BASE = process.env.PYTHON_API_BASE || 
+  (process.env.NODE_ENV === "production" ? "http://localhost:5001" : "http://localhost:5001");
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Proxy routes to Python backend
