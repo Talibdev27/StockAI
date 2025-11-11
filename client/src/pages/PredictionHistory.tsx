@@ -91,7 +91,24 @@ export default function PredictionHistory() {
     }
   };
   
-  const handleEvaluateAll = async () => {
+  const handleRefresh = async () => {
+    try {
+      await refetchHistory();
+      // Also refresh stats
+      queryClient.invalidateQueries({ queryKey: ["prediction-stats"] });
+      toast({
+        title: "Refreshed",
+        description: "Prediction history updated",
+        duration: 2000,
+      });
+    } catch (error) {
+      toast({
+        title: "Refresh Failed",
+        description: error instanceof Error ? error.message : "Failed to refresh data",
+        variant: "destructive",
+      });
+    }
+  };
     try {
       const result = await triggerBatchEvaluation();
       queryClient.invalidateQueries({ queryKey: ["prediction-history"] });
@@ -270,7 +287,12 @@ export default function PredictionHistory() {
                       Evaluate {symbol}
                     </Button>
                   )}
-                  <Button variant="outline" onClick={() => refetchHistory()}>
+                  <Button variant="outline" onClick={handleRefresh} disabled={historyLoading}>
+                    {historyLoading ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                    )}
                     Refresh
                   </Button>
                 </div>
