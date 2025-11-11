@@ -22,7 +22,8 @@ except ImportError:
 
 
 app = Flask(__name__)
-CORS(app)
+# Allow CORS from all origins (configure specific domains in production)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # yahooquery handles headers and caching automatically
 
@@ -228,24 +229,46 @@ def _load_sp500_stocks():
 @app.get("/api/stocks")
 def stocks():
     """Return list of S&P 500 stocks"""
-    popular = request.args.get("popular", "").lower() == "true"
-    all_stocks = _load_sp500_stocks()
-    
-    if popular:
-        # Return top 20 most popular/well-known stocks
-        popular_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", 
-                          "BRK.B", "V", "JNJ", "WMT", "MA", "PG", "UNH", "HD", 
-                          "DIS", "AVGO", "BAC", "ADBE", "COST"]
-        popular_stocks = [s for s in all_stocks if s["symbol"] in popular_symbols]
-        # Ensure we have exactly popular_symbols in that order
-        result = []
-        for sym in popular_symbols:
-            found = next((s for s in popular_stocks if s["symbol"] == sym), None)
-            if found:
-                result.append(found)
-        return jsonify(result)
-    
-    return jsonify(all_stocks)
+    try:
+        popular = request.args.get("popular", "").lower() == "true"
+        all_stocks = _load_sp500_stocks()
+        
+        if not all_stocks or len(all_stocks) == 0:
+            print("Warning: No stocks loaded, returning fallback list")
+            # Return fallback list if file loading failed
+            all_stocks = [
+                {"symbol": "AAPL", "name": "Apple Inc."},
+                {"symbol": "GOOGL", "name": "Alphabet Inc."},
+                {"symbol": "MSFT", "name": "Microsoft Corp."},
+                {"symbol": "TSLA", "name": "Tesla, Inc."},
+                {"symbol": "AMZN", "name": "Amazon.com, Inc."},
+            ]
+        
+        if popular:
+            # Return top 20 most popular/well-known stocks
+            popular_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", 
+                              "BRK.B", "V", "JNJ", "WMT", "MA", "PG", "UNH", "HD", 
+                              "DIS", "AVGO", "BAC", "ADBE", "COST"]
+            popular_stocks = [s for s in all_stocks if s["symbol"] in popular_symbols]
+            # Ensure we have exactly popular_symbols in that order
+            result = []
+            for sym in popular_symbols:
+                found = next((s for s in popular_stocks if s["symbol"] == sym), None)
+                if found:
+                    result.append(found)
+            return jsonify(result)
+        
+        return jsonify(all_stocks)
+    except Exception as e:
+        print(f"Error loading stocks: {e}")
+        # Return fallback list on error
+        return jsonify([
+            {"symbol": "AAPL", "name": "Apple Inc."},
+            {"symbol": "GOOGL", "name": "Alphabet Inc."},
+            {"symbol": "MSFT", "name": "Microsoft Corp."},
+            {"symbol": "TSLA", "name": "Tesla, Inc."},
+            {"symbol": "AMZN", "name": "Amazon.com, Inc."},
+        ]), 200
 
 
 @app.get("/api/indicators/<symbol>")

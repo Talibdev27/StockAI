@@ -23,7 +23,7 @@ export default function StockSelector({
   searchQuery,
   onSearchChange,
 }: StockSelectorProps) {
-  const { data: allStocks, isLoading } = useStocks();
+  const { data: allStocks, isLoading, error } = useStocks();
   
   // Filter stocks based on search query
   const filteredStocks = useMemo(() => {
@@ -63,31 +63,45 @@ export default function StockSelector({
         />
         
         {/* Search Results Dropdown */}
-        {searchQuery.trim() && filteredStocks.length > 0 && (
-          <Card className="absolute z-50 w-full mt-1 max-h-60 overflow-y-auto shadow-lg">
-            <div className="p-2">
-              {filteredStocks.map((stock: Stock) => (
-                <div
-                  key={stock.symbol}
-                  className="p-2 hover:bg-accent rounded cursor-pointer flex items-center justify-between"
-                  onClick={() => {
-                    onSelectStock(stock.symbol);
-                    onSearchChange("");
-                  }}
-                >
-                  <div>
-                    <div className="font-medium">{stock.symbol}</div>
-                    <div className="text-xs text-muted-foreground">{stock.name}</div>
-                  </div>
+        {searchQuery.trim() && (
+          <Card className="absolute z-50 w-full mt-1 shadow-lg">
+            {isLoading ? (
+              <div className="p-3 flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <div className="text-sm text-muted-foreground">Loading stocks...</div>
+              </div>
+            ) : error ? (
+              <div className="p-3">
+                <div className="text-sm text-destructive font-medium">Failed to load stocks</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {error instanceof Error ? error.message : "Please try again later"}
                 </div>
-              ))}
-            </div>
-          </Card>
-        )}
-        
-        {searchQuery.trim() && filteredStocks.length === 0 && !isLoading && (
-          <Card className="absolute z-50 w-full mt-1 p-3 shadow-lg">
-            <div className="text-sm text-muted-foreground">No stocks found</div>
+              </div>
+            ) : filteredStocks.length > 0 ? (
+              <div className="max-h-60 overflow-y-auto">
+                <div className="p-2">
+                  {filteredStocks.map((stock: Stock) => (
+                    <div
+                      key={stock.symbol}
+                      className="p-2 hover:bg-accent rounded cursor-pointer flex items-center justify-between"
+                      onClick={() => {
+                        onSelectStock(stock.symbol);
+                        onSearchChange("");
+                      }}
+                    >
+                      <div>
+                        <div className="font-medium">{stock.symbol}</div>
+                        <div className="text-xs text-muted-foreground">{stock.name}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : allStocks && allStocks.length > 0 ? (
+              <div className="p-3">
+                <div className="text-sm text-muted-foreground">No stocks found matching "{searchQuery}"</div>
+              </div>
+            ) : null}
           </Card>
         )}
       </div>

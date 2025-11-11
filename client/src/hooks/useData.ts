@@ -6,6 +6,9 @@ export function useStocks() {
     queryKey: ["stocks"],
     queryFn: () => apiGet<Array<{ symbol: string; name: string }>>("/api/stocks"),
     staleTime: 1000 * 60 * 5,
+    retry: 2, // Retry up to 2 times on failure
+    retryDelay: 1000, // Wait 1 second between retries
+    refetchOnWindowFocus: false, // Don't refetch on window focus
   });
 }
 
