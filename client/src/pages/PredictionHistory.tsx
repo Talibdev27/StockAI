@@ -8,17 +8,30 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, CheckCircle2, XCircle, Zap } from "lucide-react";
+import { Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, CheckCircle2, XCircle, Zap, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import StockSelector from "@/components/StockSelector";
 import HelpSection from "@/components/HelpSection";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { apiDelete } from "@/lib/api";
 
 export default function PredictionHistory() {
   const [symbol, setSymbol] = useState<string | undefined>("AAPL");
   const [viewMode, setViewMode] = useState<"single" | "all">("single");
   const [searchQuery, setSearchQuery] = useState("");
   const [interval, setInterval] = useState<string>("all");
-  const [limit, setLimit] = useState(100);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [predictionToDelete, setPredictionToDelete] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
   
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -91,7 +104,36 @@ export default function PredictionHistory() {
     }
   };
   
-  const handleRefresh = async () => {
+  const handleDelete = async (predictionId: number) => {
+    setPredictionToDelete(predictionId);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!predictionToDelete) return;
+
+    setDeleting(true);
+    try {
+      await apiDelete(`/api/predictions/${predictionToDelete}`);
+      queryClient.invalidateQueries({ queryKey: ["prediction-history"] });
+      queryClient.invalidateQueries({ queryKey: ["prediction-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["trading-performance"] });
+      toast({
+        title: "Prediction Deleted",
+        description: "The prediction has been deleted successfully",
+      });
+      setDeleteDialogOpen(false);
+      setPredictionToDelete(null);
+    } catch (error) {
+      toast({
+        title: "Delete Failed",
+        description: error instanceof Error ? error.message : "Failed to delete prediction",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
     try {
       await refetchHistory();
       // Also refresh stats
@@ -582,6 +624,36 @@ export default function PredictionHistory() {
           )}
         </CardContent>
       </Card>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Prediction?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this prediction? This action cannot be undone.
+              The associated evaluation will also be deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

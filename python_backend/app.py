@@ -10,7 +10,7 @@ import numpy as np
 from yahooquery import Ticker
 from models.ensemble import EnsembleModel
 from backtest import BacktestEngine
-from evaluation import save_prediction, evaluate_pending_predictions, get_prediction_history, get_prediction_stats, get_trading_performance_metrics
+from evaluation import save_prediction, evaluate_pending_predictions, get_prediction_history, get_prediction_stats, get_trading_performance_metrics, delete_prediction, delete_predictions_by_symbol
 
 # Technical indicators
 try:
@@ -718,6 +718,34 @@ def trading_performance(symbol: str = None):
     except Exception as e:
         print(f"Performance metrics error: {e}")
         return jsonify({"error": f"Failed to fetch performance metrics: {str(e)}"}), 500
+
+
+@app.delete("/api/predictions/<int:prediction_id>")
+def delete_single_prediction(prediction_id: int):
+    """Delete a single prediction by ID."""
+    try:
+        success = delete_prediction(prediction_id)
+        if success:
+            return jsonify({"message": f"Prediction {prediction_id} deleted successfully"}), 200
+        else:
+            return jsonify({"error": f"Prediction {prediction_id} not found"}), 404
+    except Exception as e:
+        print(f"Delete error: {e}")
+        return jsonify({"error": f"Failed to delete prediction: {str(e)}"}), 500
+
+
+@app.delete("/api/predictions/symbol/<symbol>")
+def delete_predictions_for_symbol(symbol: str):
+    """Delete all predictions for a specific symbol."""
+    try:
+        deleted_count = delete_predictions_by_symbol(symbol)
+        return jsonify({
+            "message": f"Deleted {deleted_count} prediction(s) for {symbol}",
+            "deleted_count": deleted_count
+        }), 200
+    except Exception as e:
+        print(f"Delete error: {e}")
+        return jsonify({"error": f"Failed to delete predictions: {str(e)}"}), 500
 
 
 @app.get("/api/health")

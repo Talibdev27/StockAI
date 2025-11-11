@@ -1001,6 +1001,70 @@ def get_model_performance_metrics(
     return model_metrics
 
 
+def delete_prediction(prediction_id: int) -> bool:
+    """
+    Delete a prediction and its associated evaluation.
+    
+    Args:
+        prediction_id: ID of the prediction to delete
+    
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    placeholder = _get_placeholder()
+    
+    try:
+        # Check if prediction exists
+        cursor.execute(f'SELECT id FROM predictions WHERE id = {placeholder}', (prediction_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return False
+        
+        # Delete prediction (evaluations will be deleted automatically due to CASCADE)
+        cursor.execute(f'DELETE FROM predictions WHERE id = {placeholder}', (prediction_id,))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error deleting prediction {prediction_id}: {e}")
+        conn.rollback()
+        conn.close()
+        return False
+
+
+def delete_predictions_by_symbol(symbol: str) -> int:
+    """
+    Delete all predictions for a specific symbol.
+    
+    Args:
+        symbol: Stock symbol
+    
+    Returns:
+        Number of predictions deleted
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    placeholder = _get_placeholder()
+    
+    try:
+        cursor.execute(f'DELETE FROM predictions WHERE symbol = {placeholder}', (symbol,))
+        deleted_count = cursor.rowcount
+        
+        conn.commit()
+        conn.close()
+        return deleted_count
+    except Exception as e:
+        print(f"Error deleting predictions for {symbol}: {e}")
+        conn.rollback()
+        conn.close()
+        return 0
+
+
 def get_trading_performance_metrics(
     symbol: Optional[str] = None,
     interval: Optional[str] = None,
