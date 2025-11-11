@@ -1,7 +1,6 @@
 {
-  "buildCommand": "npm run build:frontend",
+  "buildCommand": "npm install --production=false && npm run build:frontend",
   "outputDirectory": "dist/public",
-  "installCommand": "NODE_ENV=development npm install",
   "rewrites": [
     {
       "source": "/(.*)",
