@@ -22,7 +22,9 @@ except ImportError:
 
 
 app = Flask(__name__)
-CORS(app)
+# Configure CORS for production
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
+CORS(app, origins=cors_origins, supports_credentials=True)
 
 # yahooquery handles headers and caching automatically
 
