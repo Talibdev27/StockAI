@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: stockvue-nodejs
+    env: node
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: PYTHON_API_BASE
+        sync: false
+
+  - type: web
+    name: stockvue-python
+    env: python
+    rootDir: python_backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: FLASK_APP
+        value: app.py
+      - key: FLASK_ENV
+        value: production
+      - key: CORS_ORIGINS
+        sync: false
+
