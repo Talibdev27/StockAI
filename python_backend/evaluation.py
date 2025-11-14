@@ -415,6 +415,12 @@ def fetch_historical_price_at_time(
         if isinstance(df.index, pd.MultiIndex):
             df = df.reset_index(level=0, drop=True)
         
+        # Check if index is timezone-aware and convert to naive BEFORE resetting
+        if hasattr(df.index, 'tz') and df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        elif hasattr(df.index, 'dtype') and hasattr(df.index.dtype, 'tz') and df.index.dtype.tz is not None:
+            df.index = df.index.tz_localize(None)
+        
         # Reset index to get date/datetime as column
         df = df.reset_index()
         
@@ -428,20 +434,22 @@ def fetch_historical_price_at_time(
         if date_col is None:
             return None
         
-        # Convert date column to datetime (timezone-naive)
+        # CRITICAL FIX: Handle the date column conversion properly
+        # Step 1: If the column contains datetime objects, strip timezone info first
+        def strip_timezone(val):
+            """Strip timezone from datetime objects"""
+            if isinstance(val, datetime):
+                return val.replace(tzinfo=None) if val.tzinfo is not None else val
+            return val
+        
+        df[date_col] = df[date_col].apply(strip_timezone)
+        
+        # Step 2: Convert to pandas datetime (now all values are timezone-naive)
         df[date_col] = pd.to_datetime(df[date_col])
-        # Explicitly ensure timezone-naive (yahooquery may return timezone-aware datetimes)
-        # Check if any datetime has timezone info and remove it
-        try:
-            if df[date_col].dt.tz is not None:
-                df[date_col] = df[date_col].dt.tz_localize(None)
-        except (AttributeError, TypeError):
-            # If already timezone-naive, try to convert any timezone-aware ones
-            try:
-                df[date_col] = df[date_col].dt.tz_convert(None)
-            except (AttributeError, TypeError):
-                # Already timezone-naive, no action needed
-                pass
+        
+        # Step 3: Ensure the result is timezone-naive (defensive check)
+        if hasattr(df[date_col].dtype, 'tz') and df[date_col].dtype.tz is not None:
+            df[date_col] = df[date_col].dt.tz_localize(None)
         
         # Find the closest data point to target_time
         # For daily/weekly/monthly, find the exact date
@@ -648,11 +656,32 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
     ready_predictions = []
     not_ready_predictions = []
     
+    now_utc = datetime.now(timezone.utc)
+    print(f"\n=== Evaluating predictions at {now_utc} ===")
+    print(f"Total pending predictions: {len(predictions)}")
+    
     for pred in predictions:
+        timestamp = pred.get("timestamp")
+        interval = pred.get("interval", "unknown")
+        pred_id = pred.get("id", "unknown")
+        
+        # Debug: show raw timestamp
+        print(f"\nPrediction {pred_id}: interval={interval}, raw_timestamp={timestamp}, type={type(timestamp)}")
+        
         if is_prediction_ready_for_evaluation(pred):
             ready_predictions.append(pred)
+            print(f"  ✓ READY for evaluation")
         else:
             not_ready_predictions.append(pred)
+            # Show why it's not ready
+            timestamp_utc = normalize_to_utc(timestamp)
+            if timestamp_utc:
+                duration = get_interval_duration(interval)
+                evaluation_time = timestamp_utc + duration
+                time_remaining = evaluation_time - now_utc
+                print(f"  ✗ NOT READY: evaluation_time={evaluation_time}, time_remaining={time_remaining}")
+    
+    print(f"\nReady: {len(ready_predictions)}, Not ready: {len(not_ready_predictions)}\n")
     
     if not ready_predictions:
         interval_counts = {}
@@ -704,19 +733,84 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
             actual_price = fetch_historical_price_at_time(symbol, evaluation_time, interval)
             
             if actual_price is None:
-                # If we can't get historical price, try current price as fallback
-                # but only if evaluation_time is very recent (within last hour)
-                time_since_eval = now_utc - evaluation_time
-                if time_since_eval <= timedelta(hours=1):
-                    # Fallback to current price if evaluation was very recent
+                # Try fallback: fetch recent historical data and find closest date
+                print(f"Primary fetch failed for {symbol} at {evaluation_time}, trying fallback...")
+                try:
                     ticker = Ticker(symbol)
-                    quotes = ticker.price
-                    quote_data = quotes.get(symbol, {})
-                    actual_price = quote_data.get("regularMarketPrice")
+                    # Fetch last 30 days of daily data
+                    df = ticker.history(period="30d", interval="1d")
+                    if df is not None and not df.empty:
+                        # Handle MultiIndex
+                        if isinstance(df.index, pd.MultiIndex):
+                            df = df.reset_index(level=0, drop=True)
+                        df = df.reset_index()
+                        
+                        # Find date column
+                        date_col = None
+                        for col in ["date", "Date", "datetime", "Datetime"]:
+                            if col in df.columns:
+                                date_col = col
+                                break
+                        
+                        if date_col:
+                            # CRITICAL FIX: Strip timezone from datetime objects first
+                            def strip_timezone(val):
+                                """Strip timezone from datetime objects"""
+                                if isinstance(val, datetime):
+                                    return val.replace(tzinfo=None) if val.tzinfo is not None else val
+                                return val
+                            
+                            df[date_col] = df[date_col].apply(strip_timezone)
+                            
+                            # Convert to pandas datetime (now all timezone-naive)
+                            df[date_col] = pd.to_datetime(df[date_col])
+                            
+                            # Ensure timezone-naive (defensive)
+                            if hasattr(df[date_col].dtype, 'tz') and df[date_col].dtype.tz is not None:
+                                df[date_col] = df[date_col].dt.tz_localize(None)
+                            
+                            # Find closest date to evaluation_time (timezone-naive)
+                            eval_date_naive = evaluation_time.replace(tzinfo=None).date()
+                            df["date_only"] = df[date_col].dt.date
+                            
+                            # Try exact match first
+                            matching = df[df["date_only"] == eval_date_naive]
+                            if matching.empty:
+                                # Find closest date
+                                df["date_diff"] = abs((df["date_only"] - eval_date_naive).apply(lambda x: x.days))
+                                matching = df.nsmallest(1, "date_diff")
+                            
+                            if not matching.empty:
+                                close_col = None
+                                for col in ["close", "Close"]:
+                                    if col in matching.columns:
+                                        close_col = col
+                                        break
+                                if close_col:
+                                    price = matching.iloc[0][close_col]
+                                    if not pd.isna(price) and price is not None:
+                                        actual_price = float(price)
+                                        print(f"Fallback succeeded: found price {actual_price} for {symbol} on {eval_date_naive}")
+                except Exception as e:
+                    print(f"Fallback fetch failed: {e}")
+                
+                # Last resort: try current price if evaluation was very recent (within last hour)
+                if actual_price is None:
+                    time_since_eval = now_utc - evaluation_time
+                    if time_since_eval <= timedelta(hours=1):
+                        try:
+                            ticker = Ticker(symbol)
+                            quotes = ticker.price
+                            quote_data = quotes.get(symbol, {})
+                            actual_price = quote_data.get("regularMarketPrice")
+                            if actual_price:
+                                print(f"Using current price as last resort: {actual_price}")
+                        except Exception as e:
+                            print(f"Current price fetch failed: {e}")
                 
                 if actual_price is None:
                     skipped_count += 1
-                    print(f"Could not fetch price for {symbol} at evaluation time {evaluation_time}")
+                    print(f"Could not fetch price for {symbol} at evaluation time {evaluation_time} (tried primary, fallback, and current price)")
                     continue
             
             # Evaluate the prediction with the correct historical price
