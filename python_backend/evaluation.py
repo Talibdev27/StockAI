@@ -366,7 +366,7 @@ def fetch_historical_price_at_time(
     
     Args:
         symbol: Stock symbol
-        target_time: The time point to fetch price for
+        target_time: The time point to fetch price for (timezone-aware UTC datetime)
         interval: The interval used for the prediction (e.g., "1d", "1h", "15m")
     
     Returns:
@@ -375,10 +375,20 @@ def fetch_historical_price_at_time(
     try:
         ticker = Ticker(symbol)
         
+        # Normalize target_time to UTC if it's timezone-aware, or assume UTC if naive
+        if target_time.tzinfo is not None:
+            target_time_utc = target_time.astimezone(timezone.utc)
+        else:
+            target_time_utc = target_time.replace(tzinfo=timezone.utc)
+        
+        # Convert to timezone-naive for comparison with pandas (yahooquery returns naive datetimes)
+        target_time_naive = target_time_utc.replace(tzinfo=None)
+        
         # Determine the period needed to fetch historical data
         # We need data from before target_time to after target_time
-        now = datetime.now()
-        time_diff = now - target_time
+        now_utc = datetime.now(timezone.utc)
+        now_naive = now_utc.replace(tzinfo=None)
+        time_diff = now_naive - target_time_naive
         
         # Map interval to yahooquery period
         # For intraday intervals, we need recent data
@@ -418,7 +428,7 @@ def fetch_historical_price_at_time(
         if date_col is None:
             return None
         
-        # Convert date column to datetime
+        # Convert date column to datetime (timezone-naive)
         df[date_col] = pd.to_datetime(df[date_col])
         
         # Find the closest data point to target_time
@@ -427,22 +437,23 @@ def fetch_historical_price_at_time(
         
         if interval in ["1d", "1wk", "1mo"]:
             # For daily/weekly/monthly, match the date
-            target_date = target_time.date()
+            target_date = target_time_naive.date()
             df["date_only"] = df[date_col].dt.date
             matching_rows = df[df["date_only"] == target_date]
         else:
             # For intraday, find the closest time within the same day
-            target_date = target_time.date()
+            target_date = target_time_naive.date()
             df["date_only"] = df[date_col].dt.date
             same_day = df[df["date_only"] == target_date]
             
             if same_day.empty:
                 # If no exact match, try to find the closest time
-                df["time_diff"] = abs((df[date_col] - target_time).dt.total_seconds())
+                # Use timezone-naive for comparison
+                df["time_diff"] = abs((df[date_col] - target_time_naive).dt.total_seconds())
                 matching_rows = df.nsmallest(1, "time_diff")
             else:
                 # Find closest time on the same day
-                same_day["time_diff"] = abs((same_day[date_col] - target_time).dt.total_seconds())
+                same_day["time_diff"] = abs((same_day[date_col] - target_time_naive).dt.total_seconds())
                 matching_rows = same_day.nsmallest(1, "time_diff")
         
         if matching_rows.empty:
@@ -468,6 +479,8 @@ def fetch_historical_price_at_time(
         
     except Exception as e:
         print(f"Error fetching historical price for {symbol} at {target_time}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
