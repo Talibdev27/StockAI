@@ -10,7 +10,12 @@ import {
   Target,
   LineChart,
   Database,
-  Cpu
+  Cpu,
+  CheckCircle2,
+  History,
+  Activity,
+  Gauge,
+  Trash2
 } from "lucide-react";
 
 export default function About() {
@@ -41,10 +46,11 @@ export default function About() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <Card className="p-6 hover:shadow-lg transition-shadow">
               <Brain className="h-10 w-10 text-blue-500 mb-4" />
-              <h3 className="text-xl font-semibold mb-2">Multi-Model Ensemble</h3>
+              <h3 className="text-xl font-semibold mb-2">7-Model Ensemble</h3>
               <p className="text-muted-foreground">
-                Combines Linear Regression, LSTM neural networks, ARIMA time series, and XGBoost 
-                to generate robust predictions with confidence scores.
+                Combines Linear Regression, LSTM neural networks, ARIMA time series, XGBoost, 
+                Decision Tree, SVM, and Prophet models with performance-based weighting for 
+                optimal prediction accuracy.
               </p>
             </Card>
 
@@ -92,6 +98,42 @@ export default function About() {
                 and historical data across multiple timeframes.
               </p>
             </Card>
+
+            <Card className="p-6 hover:shadow-lg transition-shadow">
+              <Gauge className="h-10 w-10 text-indigo-500 mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Performance-Based Weighting</h3>
+              <p className="text-muted-foreground">
+                Dynamic model weights adapt based on historical prediction accuracy, 
+                automatically prioritizing the most reliable models for each stock and timeframe.
+              </p>
+            </Card>
+
+            <Card className="p-6 hover:shadow-lg transition-shadow">
+              <CheckCircle2 className="h-10 w-10 text-green-500 mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Prediction Evaluation</h3>
+              <p className="text-muted-foreground">
+                Automatic evaluation system tracks prediction accuracy by comparing forecasts 
+                with actual prices after time horizons pass, providing real performance metrics.
+              </p>
+            </Card>
+
+            <Card className="p-6 hover:shadow-lg transition-shadow">
+              <History className="h-10 w-10 text-teal-500 mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Prediction History</h3>
+              <p className="text-muted-foreground">
+                Complete history of all predictions with evaluation results, performance tracking, 
+                and management tools. View, filter, and delete predictions with ease.
+              </p>
+            </Card>
+
+            <Card className="p-6 hover:shadow-lg transition-shadow">
+              <Activity className="h-10 w-10 text-red-500 mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Performance Metrics</h3>
+              <p className="text-muted-foreground">
+                Real-time tracking of prediction accuracy, Sharpe ratio, win rate, and total return 
+                calculated from evaluated predictions to measure model effectiveness.
+              </p>
+            </Card>
           </div>
         </div>
 
@@ -114,6 +156,9 @@ export default function About() {
                 <Badge variant="secondary">statsmodels</Badge>
                 <Badge variant="secondary">ARIMA</Badge>
                 <Badge variant="secondary">LSTM</Badge>
+                <Badge variant="secondary">Prophet</Badge>
+                <Badge variant="secondary">PostgreSQL</Badge>
+                <Badge variant="secondary">SQLite</Badge>
               </div>
             </Card>
 
@@ -140,7 +185,7 @@ export default function About() {
           <h2 className="text-2xl font-semibold mb-6 text-center">Capabilities</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card className="p-4 text-center">
-              <div className="text-3xl font-bold text-blue-500 mb-2">4</div>
+              <div className="text-3xl font-bold text-blue-500 mb-2">7</div>
               <div className="text-sm text-muted-foreground">ML Models</div>
             </Card>
             <Card className="p-4 text-center">
@@ -154,6 +199,14 @@ export default function About() {
             <Card className="p-4 text-center">
               <div className="text-3xl font-bold text-orange-500 mb-2">10+</div>
               <div className="text-sm text-muted-foreground">Candlestick Patterns</div>
+            </Card>
+            <Card className="p-4 text-center">
+              <div className="text-3xl font-bold text-indigo-500 mb-2">∞</div>
+              <div className="text-sm text-muted-foreground">Predictions Tracked</div>
+            </Card>
+            <Card className="p-4 text-center">
+              <div className="text-3xl font-bold text-teal-500 mb-2">100%</div>
+              <div className="text-sm text-muted-foreground">Auto Evaluation</div>
             </Card>
           </div>
         </div>
