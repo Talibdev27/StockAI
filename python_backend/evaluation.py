@@ -431,8 +431,17 @@ def fetch_historical_price_at_time(
         # Convert date column to datetime (timezone-naive)
         df[date_col] = pd.to_datetime(df[date_col])
         # Explicitly ensure timezone-naive (yahooquery may return timezone-aware datetimes)
-        if df[date_col].dt.tz is not None:
-            df[date_col] = df[date_col].dt.tz_localize(None)
+        # Check if any datetime has timezone info and remove it
+        try:
+            if df[date_col].dt.tz is not None:
+                df[date_col] = df[date_col].dt.tz_localize(None)
+        except (AttributeError, TypeError):
+            # If already timezone-naive, try to convert any timezone-aware ones
+            try:
+                df[date_col] = df[date_col].dt.tz_convert(None)
+            except (AttributeError, TypeError):
+                # Already timezone-naive, no action needed
+                pass
         
         # Find the closest data point to target_time
         # For daily/weekly/monthly, find the exact date
