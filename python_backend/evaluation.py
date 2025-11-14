@@ -7,7 +7,7 @@ Uses DATABASE_URL environment variable to determine which database to use.
 """
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
@@ -74,6 +74,61 @@ def get_interval_duration(interval: str) -> timedelta:
     return INTERVAL_DURATIONS.get(interval, timedelta(days=1))  # Default to 1 day
 
 
+def normalize_to_utc(timestamp: Any) -> Optional[datetime]:
+    """
+    Normalize any timestamp format to UTC datetime.
+    
+    Handles:
+    - datetime objects (timezone-aware or naive)
+    - ISO format strings
+    - Database timestamp strings
+    
+    Args:
+        timestamp: Timestamp in any format (datetime, string, etc.)
+    
+    Returns:
+        UTC datetime object, or None if parsing fails
+    """
+    if timestamp is None:
+        return None
+    
+    # If already a datetime object
+    if isinstance(timestamp, datetime):
+        if timestamp.tzinfo is None:
+            # Assume UTC if timezone-naive (as stored in database)
+            return timestamp.replace(tzinfo=timezone.utc)
+        else:
+            # Convert to UTC if timezone-aware
+            return timestamp.astimezone(timezone.utc)
+    
+    # If it's a string, parse it
+    if isinstance(timestamp, str):
+        try:
+            # Try ISO format first (handles timezone info)
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt
+        except (ValueError, AttributeError):
+            try:
+                # Try standard format: "YYYY-MM-DD HH:MM:SS"
+                dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                # Assume UTC for database timestamps
+                return dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                try:
+                    # Try date-only format: "YYYY-MM-DD"
+                    dt = datetime.strptime(timestamp, "%Y-%m-%d")
+                    return dt.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    print(f"Warning: Could not parse timestamp: {timestamp}")
+                    return None
+    
+    return None
+
+
 def is_prediction_ready_for_evaluation(prediction: Dict[str, Any]) -> bool:
     """
     Check if a prediction is ready for evaluation based on its timestamp and interval.
@@ -93,32 +148,30 @@ def is_prediction_ready_for_evaluation(prediction: Dict[str, Any]) -> bool:
     if not timestamp or not interval:
         return False
     
-    # Parse timestamp if it's a string
-    if isinstance(timestamp, str):
-        try:
-            timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-        except (ValueError, AttributeError):
-            try:
-                timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                return False
+    # Normalize timestamp to UTC datetime
+    timestamp_utc = normalize_to_utc(timestamp)
+    if timestamp_utc is None:
+        print(f"Warning: Could not parse timestamp for prediction {prediction.get('id', 'unknown')}: {timestamp}")
+        return False
     
     # Get the duration for this interval
     duration = get_interval_duration(interval)
     
-    # Calculate when this prediction should be evaluated
-    evaluation_time = timestamp + duration
+    # Calculate when this prediction should be evaluated (in UTC)
+    evaluation_time = timestamp_utc + duration
+    
+    # Get current time in UTC
+    now_utc = datetime.now(timezone.utc)
     
     # Check if enough time has passed
-    now = datetime.now()
+    is_ready = evaluation_time <= now_utc
     
-    # Handle timezone-aware timestamps
-    if timestamp.tzinfo is not None and now.tzinfo is None:
-        now = now.replace(tzinfo=timestamp.tzinfo)
-    elif timestamp.tzinfo is None and now.tzinfo is not None:
-        timestamp = timestamp.replace(tzinfo=now.tzinfo)
+    # Debug logging (can be removed later)
+    if not is_ready:
+        time_remaining = evaluation_time - now_utc
+        print(f"Prediction {prediction.get('id', 'unknown')} not ready: {time_remaining.total_seconds() / 3600:.2f} hours remaining")
     
-    return evaluation_time <= now
+    return is_ready
 
 
 def _row_to_dict(row):
