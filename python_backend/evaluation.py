@@ -430,6 +430,9 @@ def fetch_historical_price_at_time(
         
         # Convert date column to datetime (timezone-naive)
         df[date_col] = pd.to_datetime(df[date_col])
+        # Explicitly ensure timezone-naive (yahooquery may return timezone-aware datetimes)
+        if df[date_col].dt.tz is not None:
+            df[date_col] = df[date_col].dt.tz_localize(None)
         
         # Find the closest data point to target_time
         # For daily/weekly/monthly, find the exact date
