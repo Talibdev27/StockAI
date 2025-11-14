@@ -660,20 +660,20 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
             interval = pred.get("interval", "1d")
             timestamp = pred.get("timestamp")
             
-            # Parse timestamp
-            if isinstance(timestamp, str):
-                try:
-                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                except (ValueError, AttributeError):
-                    try:
-                        timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        error_count += 1
-                        continue
+            # Normalize timestamp to UTC
+            timestamp_utc = normalize_to_utc(timestamp)
+            if timestamp_utc is None:
+                print(f"Error: Could not parse timestamp for prediction {pred.get('id', 'unknown')}: {timestamp}")
+                error_count += 1
+                continue
             
-            # Calculate the evaluation time (when the prediction should be evaluated)
+            # Calculate the evaluation time (when the prediction should be evaluated) in UTC
             duration = get_interval_duration(interval)
-            evaluation_time = timestamp + duration
+            evaluation_time = timestamp_utc + duration
+            
+            # Debug logging
+            now_utc = datetime.now(timezone.utc)
+            print(f"Evaluating prediction {pred.get('id')}: made at {timestamp_utc}, evaluation_time={evaluation_time}, now={now_utc}, interval={interval}")
             
             # Fetch historical price at the evaluation time
             actual_price = fetch_historical_price_at_time(symbol, evaluation_time, interval)
@@ -681,13 +681,7 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
             if actual_price is None:
                 # If we can't get historical price, try current price as fallback
                 # but only if evaluation_time is very recent (within last hour)
-                now = datetime.now()
-                if timestamp.tzinfo is not None and now.tzinfo is None:
-                    now = now.replace(tzinfo=timestamp.tzinfo)
-                elif timestamp.tzinfo is None and now.tzinfo is not None:
-                    timestamp = timestamp.replace(tzinfo=now.tzinfo)
-                
-                time_since_eval = now - evaluation_time
+                time_since_eval = now_utc - evaluation_time
                 if time_since_eval <= timedelta(hours=1):
                     # Fallback to current price if evaluation was very recent
                     ticker = Ticker(symbol)
