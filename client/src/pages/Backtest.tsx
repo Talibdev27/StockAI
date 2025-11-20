@@ -20,6 +20,8 @@ export default function Backtest() {
   const [commission, setCommission] = useState(0.001);
   const [positionSize, setPositionSize] = useState(1.0);
   const [threshold, setThreshold] = useState(0.0);
+  const [slippage, setSlippage] = useState(0.0005);
+  const [slippageType, setSlippageType] = useState("hybrid");
   const [runBacktest, setRunBacktest] = useState(false);
 
   const { data: results, isLoading, error } = useBacktest(
@@ -32,6 +34,8 @@ export default function Backtest() {
       commission,
       positionSize,
       threshold,
+      slippage,
+      slippageType,
     },
     runBacktest
   );
@@ -196,9 +200,11 @@ export default function Backtest() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="simple_signals">Simple Signals</SelectItem>
-                  <SelectItem value="threshold">Threshold</SelectItem>
-                  <SelectItem value="momentum">Momentum</SelectItem>
+                  <SelectItem value="simple_signals">Simple Signals (ML)</SelectItem>
+                  <SelectItem value="threshold">Threshold (ML)</SelectItem>
+                  <SelectItem value="momentum">Momentum (ML)</SelectItem>
+                  <SelectItem value="buy_and_hold">Buy-and-Hold (Benchmark)</SelectItem>
+                  <SelectItem value="random">Random Trading (Benchmark)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -248,6 +254,32 @@ export default function Backtest() {
                 max={0.1}
                 step={0.001}
               />
+            </div>
+
+            <div>
+              <Label>Slippage (0.0005 = 0.05%)</Label>
+              <Input
+                type="number"
+                value={slippage}
+                onChange={(e) => setSlippage(Number(e.target.value))}
+                min={0}
+                max={0.01}
+                step={0.0001}
+              />
+            </div>
+
+            <div>
+              <Label>Slippage Type</Label>
+              <Select value={slippageType} onValueChange={setSlippageType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fixed">Fixed</SelectItem>
+                  <SelectItem value="volatility">Volatility-Based</SelectItem>
+                  <SelectItem value="hybrid">Hybrid (Recommended)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -374,6 +406,25 @@ export default function Backtest() {
                   <TrendingDown className="h-8 w-8 text-red-500" />
                 </div>
               </Card>
+
+              {results.metrics.totalSlippage !== undefined && (
+                <Card className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Total Slippage</p>
+                      <p className="text-2xl font-bold text-orange-500">
+                        ${results.metrics.totalSlippage.toFixed(2)}
+                      </p>
+                      {results.metrics.slippageImpactPercent !== undefined && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {results.metrics.slippageImpactPercent.toFixed(3)}% of capital
+                        </p>
+                      )}
+                    </div>
+                    <Activity className="h-8 w-8 text-orange-500" />
+                  </div>
+                </Card>
+              )}
             </div>
 
             {/* Equity Curve Chart */}
@@ -392,7 +443,9 @@ export default function Backtest() {
                       <th className="text-left p-2">Date</th>
                       <th className="text-left p-2">Type</th>
                       <th className="text-right p-2">Price</th>
+                      <th className="text-right p-2">Exec. Price</th>
                       <th className="text-right p-2">Shares</th>
+                      <th className="text-right p-2">Slippage</th>
                       <th className="text-right p-2">P&L</th>
                     </tr>
                   </thead>
@@ -412,7 +465,24 @@ export default function Backtest() {
                           </span>
                         </td>
                         <td className="text-right p-2">${trade.price.toFixed(2)}</td>
+                        <td className="text-right p-2">
+                          {trade.execution_price !== undefined ? (
+                            <>
+                              ${trade.execution_price.toFixed(2)}
+                              {trade.slippage_pct !== undefined && (
+                                <span className={`text-xs ml-1 ${trade.type === "buy" ? "text-red-400" : "text-red-400"}`}>
+                                  ({trade.slippage_pct.toFixed(3)}%)
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                         <td className="text-right p-2">{trade.shares.toFixed(2)}</td>
+                        <td className="text-right p-2 text-orange-500">
+                          {trade.slippage_cost !== undefined ? `$${trade.slippage_cost.toFixed(2)}` : "-"}
+                        </td>
                         <td className={`text-right p-2 ${trade.pnl && trade.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
                           {trade.pnl !== undefined ? `$${trade.pnl.toFixed(2)}` : "-"}
                         </td>

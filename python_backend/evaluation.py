@@ -26,7 +26,7 @@ if USE_POSTGRES:
         print("Warning: psycopg2 not installed, falling back to SQLite")
         USE_POSTGRES = False
         import sqlite3
-        DB_PATH = os.path.join(os.path.dirname(__file__), "predictions.db")
+    DB_PATH = os.path.join(os.path.dirname(__file__), "predictions.db")
 else:
     import sqlite3
     DB_PATH = os.path.join(os.path.dirname(__file__), "predictions.db")
@@ -223,36 +223,36 @@ def init_db():
     else:
         # SQLite schema
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS predictions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL,
-                timestamp DATETIME NOT NULL,
-                interval TEXT NOT NULL,
-                horizon INTEGER NOT NULL,
-                current_price REAL NOT NULL,
-                predicted_price REAL NOT NULL,
-                confidence REAL NOT NULL,
-                model_breakdown TEXT,
-                actual_price REAL,
-                evaluated BOOLEAN DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS evaluations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                prediction_id INTEGER NOT NULL,
-                actual_price REAL NOT NULL,
-                error REAL NOT NULL,
-                error_percent REAL NOT NULL,
-                direction_actual TEXT NOT NULL,
-                direction_predicted TEXT NOT NULL,
-                correct BOOLEAN NOT NULL,
-                evaluated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (prediction_id) REFERENCES predictions(id)
-            )
-        ''')
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            timestamp DATETIME NOT NULL,
+            interval TEXT NOT NULL,
+            horizon INTEGER NOT NULL,
+            current_price REAL NOT NULL,
+            predicted_price REAL NOT NULL,
+            confidence REAL NOT NULL,
+            model_breakdown TEXT,
+            actual_price REAL,
+            evaluated BOOLEAN DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prediction_id INTEGER NOT NULL,
+            actual_price REAL NOT NULL,
+            error REAL NOT NULL,
+            error_percent REAL NOT NULL,
+            direction_actual TEXT NOT NULL,
+            direction_predicted TEXT NOT NULL,
+            correct BOOLEAN NOT NULL,
+            evaluated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (prediction_id) REFERENCES predictions(id)
+        )
+    ''')
     
     # Create indexes for performance
     placeholder = _get_placeholder()
@@ -298,8 +298,8 @@ def save_prediction(
     
     if USE_POSTGRES:
         cursor.execute(f'''
-            INSERT INTO predictions 
-            (symbol, timestamp, interval, horizon, current_price, predicted_price, confidence, model_breakdown, evaluated)
+        INSERT INTO predictions 
+        (symbol, timestamp, interval, horizon, current_price, predicted_price, confidence, model_breakdown, evaluated)
             VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, FALSE)
             RETURNING id
         ''', (
@@ -318,17 +318,17 @@ def save_prediction(
             INSERT INTO predictions 
             (symbol, timestamp, interval, horizon, current_price, predicted_price, confidence, model_breakdown, evaluated)
             VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 0)
-        ''', (
-            symbol,
-            datetime.utcnow().isoformat(),
-            interval,
-            horizon,
-            current_price,
-            predicted_price,
-            confidence,
-            model_breakdown_json,
-        ))
-        prediction_id = cursor.lastrowid
+    ''', (
+        symbol,
+        datetime.utcnow().isoformat(),
+        interval,
+        horizon,
+        current_price,
+        predicted_price,
+        confidence,
+        model_breakdown_json,
+    ))
+    prediction_id = cursor.lastrowid
     
     conn.commit()
     conn.close()
@@ -698,7 +698,7 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
             "ready": 0,
             "not_ready": len(not_ready_predictions),
             "message": f"No predictions are ready for evaluation yet. {len(not_ready_predictions)} prediction(s) pending ({interval_msg}). Predictions will be ready after their prediction horizon has passed."
-        }
+            }
     
     evaluated_count = 0
     error_count = 0
@@ -807,11 +807,11 @@ def evaluate_pending_predictions(symbol: Optional[str] = None, max_predictions: 
                                 print(f"Using current price as last resort: {actual_price}")
                         except Exception as e:
                             print(f"Current price fetch failed: {e}")
-                
-                if actual_price is None:
-                    skipped_count += 1
-                    print(f"Could not fetch price for {symbol} at evaluation time {evaluation_time} (tried primary, fallback, and current price)")
-                    continue
+            
+            if actual_price is None:
+                skipped_count += 1
+                print(f"Could not fetch price for {symbol} at evaluation time {evaluation_time} (tried primary, fallback, and current price)")
+                continue
             
             # Evaluate the prediction with the correct historical price
             evaluate_prediction(pred["id"], float(actual_price))

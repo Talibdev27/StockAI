@@ -548,9 +548,11 @@ def backtest(symbol: str):
     commission = float(request.args.get("commission", 0.001))
     position_size = float(request.args.get("position_size", 1.0))
     threshold = float(request.args.get("threshold", 0.0))
+    slippage = float(request.args.get("slippage", 0.0005))
+    slippage_type = request.args.get("slippage_type", "hybrid")
     
     # Validate strategy
-    valid_strategies = ["simple_signals", "threshold", "momentum"]
+    valid_strategies = ["simple_signals", "threshold", "momentum", "buy_and_hold", "random"]
     if strategy not in valid_strategies:
         return jsonify({"error": f"Invalid strategy. Must be one of: {valid_strategies}"}), 400
     
@@ -631,6 +633,11 @@ def backtest(symbol: str):
         dates = dates[:min_len]
         aligned_predictions = aligned_predictions[:min_len]
         
+        # Validate slippage_type
+        valid_slippage_types = ["fixed", "volatility", "hybrid"]
+        if slippage_type not in valid_slippage_types:
+            slippage_type = "hybrid"  # Default to hybrid
+        
         # Run backtest
         engine = BacktestEngine(
             strategy=strategy,
@@ -638,6 +645,8 @@ def backtest(symbol: str):
             commission=commission,
             position_size=position_size,
             threshold=threshold,
+            slippage=slippage,
+            slippage_type=slippage_type,
         )
         
         results = engine.run_backtest(

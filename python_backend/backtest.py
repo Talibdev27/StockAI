@@ -17,6 +17,8 @@ class BacktestEngine:
         commission: float = 0.001,
         position_size: float = 1.0,
         threshold: float = 0.0,
+        slippage: float = 0.0005,
+        slippage_type: str = "hybrid",
     ):
         """
         Initialize backtest engine.
@@ -27,12 +29,16 @@ class BacktestEngine:
             commission: Commission per trade (0.001 = 0.1%)
             position_size: Position size as fraction of capital (1.0 = 100%)
             threshold: Threshold for threshold/momentum strategies
+            slippage: Base slippage percentage (0.0005 = 0.05%)
+            slippage_type: Slippage calculation method ("fixed", "volatility", "hybrid")
         """
         self.strategy = strategy
         self.initial_capital = initial_capital
         self.commission = commission
         self.position_size = position_size
         self.threshold = threshold
+        self.slippage = slippage
+        self.slippage_type = slippage_type
         
         # State tracking
         self.cash = initial_capital
@@ -42,6 +48,7 @@ class BacktestEngine:
         self.prices = []
         self.predictions = []
         self.dates = []
+        self.total_slippage_cost = 0.0
         
     def run_backtest(
         self,
@@ -73,6 +80,11 @@ class BacktestEngine:
         self.prices = closes.tolist()
         self.predictions = predictions
         self.dates = dates
+        self.total_slippage_cost = 0.0
+        
+        # Initialize random seed for random strategy (for reproducibility)
+        if self.strategy == "random":
+            np.random.seed(42)
         
         # Walk-forward backtest
         for i in range(len(closes)):
@@ -84,9 +96,9 @@ class BacktestEngine:
             
             # Execute trade
             if signal == "buy" and self.shares == 0:
-                self._buy(current_price, dates[i])
+                self._buy(current_price, dates[i], i)
             elif signal == "sell" and self.shares > 0:
-                self._sell(current_price, dates[i])
+                self._sell(current_price, dates[i], i)
             
             # Update equity curve
             equity = self.cash + self.shares * current_price
@@ -99,7 +111,8 @@ class BacktestEngine:
         # Close any open position at end
         if self.shares > 0:
             final_price = closes[-1]
-            self._sell(final_price, dates[-1])
+            final_index = len(closes) - 1
+            self._sell(final_price, dates[-1], final_index)
             # Update final equity
             self.equity_curve[-1]["value"] = self.cash
         
@@ -156,51 +169,189 @@ class BacktestEngine:
                 elif predicted_price < current_price * 0.98:
                     return "sell"
         
+        elif self.strategy == "buy_and_hold":
+            # Buy-and-Hold: Buy on first day, sell on last day
+            if index == 0:  # First day
+                return "buy"
+            elif index == len(self.prices) - 1:  # Last day
+                return "sell"
+            return "hold"
+        
+        elif self.strategy == "random":
+            # Random Trading: Random buy/sell decisions (50% probability each)
+            # Seed is set once at start of backtest for reproducibility
+            random_value = np.random.random()
+            
+            if self.shares == 0:  # Not holding
+                return "buy" if random_value > 0.5 else "hold"
+            else:  # Holding
+                return "sell" if random_value > 0.5 else "hold"
+        
         return "hold"
     
-    def _buy(self, price: float, date: str):
-        """Execute buy order."""
+    def _calculate_slippage(self, index: int, price: float) -> float:
+        """
+        Calculate slippage based on selected method.
+        
+        Args:
+            index: Current price index
+            price: Current price
+            
+        Returns:
+            Slippage percentage (e.g., 0.0005 for 0.05%)
+        """
+        if self.slippage_type == "fixed":
+            return self.slippage
+        
+        elif self.slippage_type == "volatility":
+            # Need at least 2 prices to calculate volatility
+            if len(self.prices) < 2 or index < 1:
+                return self.slippage
+            
+            # Calculate rolling volatility from recent returns
+            window = min(20, index)  # Use up to 20 periods, or available data
+            if window < 2:
+                return self.slippage
+            
+            recent_prices = self.prices[max(0, index - window):index + 1]
+            if len(recent_prices) < 2:
+                return self.slippage
+            
+            # Calculate returns
+            returns = []
+            for i in range(1, len(recent_prices)):
+                if recent_prices[i-1] > 0:
+                    ret = (recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1]
+                    returns.append(ret)
+            
+            if not returns:
+                return self.slippage
+            
+            # Calculate volatility (standard deviation of returns)
+            volatility = np.std(returns)
+            
+            # Scale volatility to slippage (volatility_factor = 0.5 means 50% of volatility becomes slippage)
+            volatility_factor = 0.5
+            volatility_component = volatility * volatility_factor
+            
+            # Cap maximum slippage at 0.5% (0.005)
+            max_slippage = 0.005
+            slippage = min(self.slippage + volatility_component, max_slippage)
+            
+            return max(slippage, 0.0)  # Ensure non-negative
+        
+        elif self.slippage_type == "hybrid":
+            # Combine fixed base with volatility component
+            base_slippage = self.slippage
+            
+            # Need at least 2 prices to calculate volatility
+            if len(self.prices) < 2 or index < 1:
+                return base_slippage
+            
+            # Calculate rolling volatility from recent returns
+            window = min(20, index)
+            if window < 2:
+                return base_slippage
+            
+            recent_prices = self.prices[max(0, index - window):index + 1]
+            if len(recent_prices) < 2:
+                return base_slippage
+            
+            # Calculate returns
+            returns = []
+            for i in range(1, len(recent_prices)):
+                if recent_prices[i-1] > 0:
+                    ret = (recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1]
+                    returns.append(ret)
+            
+            if not returns:
+                return base_slippage
+            
+            # Calculate volatility
+            volatility = np.std(returns)
+            
+            # Volatility component (capped at 0.2%)
+            volatility_factor = 0.5
+            volatility_component = min(volatility * volatility_factor, 0.002)
+            
+            slippage = base_slippage + volatility_component
+            
+            # Cap maximum slippage at 0.5%
+            max_slippage = 0.005
+            return min(slippage, max_slippage)
+        
+        else:
+            # Default to fixed if unknown type
+            return self.slippage
+    
+    def _buy(self, price: float, date: str, index: int):
+        """Execute buy order with slippage."""
+        # Calculate slippage for this trade using current price index
+        slippage_pct = self._calculate_slippage(index, price)
+        
+        # Apply slippage: buy orders pay more (price * (1 + slippage))
+        execution_price = price * (1 + slippage_pct)
+        
         capital_to_use = self.cash * self.position_size
-        shares_to_buy = capital_to_use / price * (1 - self.commission)
-        cost = shares_to_buy * price * (1 + self.commission)
+        shares_to_buy = capital_to_use / execution_price * (1 - self.commission)
+        cost = shares_to_buy * execution_price * (1 + self.commission)
+        
+        # Calculate slippage cost
+        slippage_cost = shares_to_buy * price * slippage_pct
         
         if cost <= self.cash:
             self.shares = shares_to_buy
             self.cash -= cost
+            self.total_slippage_cost += slippage_cost
             
             self.trades.append({
                 "date": date,
                 "type": "buy",
-                "price": float(price),
+                "price": float(price),  # Original price
+                "execution_price": float(execution_price),  # Price with slippage
                 "shares": float(shares_to_buy),
                 "cost": float(cost),
+                "slippage_cost": float(slippage_cost),
+                "slippage_pct": float(slippage_pct * 100),  # As percentage
             })
     
-    def _sell(self, price: float, date: str):
-        """Execute sell order."""
+    def _sell(self, price: float, date: str, index: int):
+        """Execute sell order with slippage."""
         if self.shares > 0:
-            proceeds = self.shares * price * (1 - self.commission)
+            # Calculate slippage for this trade using current price index
+            slippage_pct = self._calculate_slippage(index, price)
             
-            # Calculate PnL from buy price
+            # Apply slippage: sell orders receive less (price * (1 - slippage))
+            execution_price = price * (1 - slippage_pct)
+            
+            proceeds = self.shares * execution_price * (1 - self.commission)
+            
+            # Calculate slippage cost
+            slippage_cost = self.shares * price * slippage_pct
+            
+            # Calculate PnL from buy price (using original buy price, not execution price)
             buy_trades = [t for t in self.trades if t["type"] == "buy"]
             if buy_trades:
-                # Use last buy price and cost
+                # Use last buy cost (which already includes buy slippage)
                 last_buy = buy_trades[-1]
-                buy_price = last_buy["price"]
-                buy_cost = last_buy.get("cost", buy_price * self.shares)
+                buy_cost = last_buy.get("cost", last_buy.get("execution_price", last_buy["price"]) * self.shares)
                 pnl = proceeds - buy_cost
             else:
                 # Fallback if no buy found (shouldn't happen)
                 pnl = 0.0
             
             self.cash += proceeds
+            self.total_slippage_cost += slippage_cost
             
             self.trades.append({
                 "date": date,
                 "type": "sell",
-                "price": float(price),
+                "price": float(price),  # Original price
+                "execution_price": float(execution_price),  # Price with slippage
                 "shares": float(self.shares),
                 "pnl": float(pnl),
+                "slippage_cost": float(slippage_cost),
+                "slippage_pct": float(slippage_pct * 100),  # As percentage
             })
             
             self.shares = 0.0
@@ -275,6 +426,10 @@ class BacktestEngine:
             avg_win = np.mean([t["pnl"] for t in winning_trades]) if winning_trades else 0.0
             avg_loss = np.mean([t["pnl"] for t in losing_trades]) if losing_trades else 0.0
         
+        # Calculate total slippage cost
+        total_slippage = round(float(self.total_slippage_cost), 2)
+        slippage_impact_pct = (total_slippage / self.initial_capital) * 100 if self.initial_capital > 0 else 0.0
+        
         return {
             "pnl": round(float(pnl), 2),
             "returnPercent": round(float(return_percent), 2),
@@ -284,5 +439,7 @@ class BacktestEngine:
             "totalTrades": total_trades,
             "avgWin": round(float(avg_win), 2),
             "avgLoss": round(float(avg_loss), 2),
+            "totalSlippage": total_slippage,
+            "slippageImpactPercent": round(float(slippage_impact_pct), 4),
         }
 

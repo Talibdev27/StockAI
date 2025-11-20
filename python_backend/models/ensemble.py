@@ -6,8 +6,10 @@ LSTM, and ARIMA models to produce more robust and accurate predictions.
 """
 
 import os
+import time
 import numpy as np
 from typing import Dict, Tuple, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .linear_model import LinearRegressionModel
 from .lstm_model import LSTMModel
 from .arima_model import ARIMAModel
@@ -115,6 +117,30 @@ class EnsembleModel:
         self.warnings = []
         self.performance_metrics = {}  # Cache for performance metrics
         
+        # Direction weighting configuration (configurable via environment variable)
+        self.direction_weight = float(os.getenv("ENSEMBLE_DIRECTION_WEIGHT", "0.4"))  # Default 40% weight for direction
+        
+    def _predict_single_model(self, name, model, closes, horizon):
+        """
+        Wrapper for single model prediction (for parallel execution).
+        
+        Args:
+            name: Model name
+            model: Model instance
+            closes: Historical closing prices
+            horizon: Number of future periods to predict
+            
+        Returns:
+            Tuple of (name, forecast, next_pred, error)
+        """
+        try:
+            if self.confidences.get(name, 0) > 0:
+                forecast, next_pred = model.predict(closes, horizon)
+                return name, forecast, next_pred, None
+            return name, None, None, None
+        except Exception as e:
+            return name, None, None, str(e)
+        
     def _get_lag(self):
         """
         Get adaptive lag based on interval.
@@ -199,15 +225,22 @@ class EnsembleModel:
         self, 
         valid_models: dict, 
         symbol: str = None, 
-        interval: str = None
+        interval: str = None,
+        prioritize_direction: bool = False,
+        closes: np.ndarray = None
     ) -> Tuple[Dict[str, float], bool]:
         """
         Calculate weights based on historical performance metrics.
+        
+        Uses direction-based weighting that considers both price prediction accuracy (RMSE)
+        and direction prediction accuracy (up/down/neutral). The balance between these
+        two metrics is configurable via ENSEMBLE_DIRECTION_WEIGHT environment variable.
         
         Args:
             valid_models: Dictionary of model names with valid predictions
             symbol: Stock symbol for filtering performance data
             interval: Time interval for filtering performance data
+            prioritize_direction: If True, use 50/50 split or higher direction weight
         
         Returns:
             Tuple of (weights_dict, use_performance_based)
@@ -236,11 +269,39 @@ class EnsembleModel:
             
             # Calculate weights based on performance scores
             # Use performance score if available, otherwise use confidence
+            # Recalculate performance score with configurable direction weight
             performance_scores = {}
+            direction_weight = 0.5 if prioritize_direction else self.direction_weight
+            
+            # Estimate average price from closes for RMSE normalization
+            # Use median of recent closes as representative price
+            if closes is not None and len(closes) > 0:
+                avg_price_estimate = float(np.median(closes[-30:]))
+            else:
+                avg_price_estimate = 100.0  # Default fallback
+            
             for model_name in valid_models.keys():
                 if model_name in performance_metrics:
-                    # Use performance score (0-1, higher is better)
-                    performance_scores[model_name] = performance_metrics[model_name]["score"]
+                    perf = performance_metrics[model_name]
+                    # Recalculate score with configurable direction weight
+                    # Get RMSE and direction_accuracy from metrics
+                    rmse = perf.get("rmse", float('inf'))
+                    direction_accuracy = perf.get("direction_accuracy", 0.0)
+                    
+                    if rmse > 0 and not np.isinf(rmse) and avg_price_estimate > 0:
+                        # Normalize RMSE: convert to score (0-1), lower RMSE = higher score
+                        # Use same normalization approach as evaluation.py
+                        normalized_rmse = rmse / avg_price_estimate
+                        rmse_score = max(0.0, min(1.0, 1.0 / (1.0 + normalized_rmse * 10)))
+                        
+                        # Use configurable direction weight
+                        rmse_weight = 1.0 - direction_weight
+                        performance_score = (rmse_score * rmse_weight) + (direction_accuracy / 100 * direction_weight)
+                    else:
+                        # Fallback to direction accuracy only
+                        performance_score = direction_accuracy / 100
+                    
+                    performance_scores[model_name] = performance_score
                 else:
                     # Model not in performance data, use confidence as fallback
                     performance_scores[model_name] = self.confidences.get(model_name, 0.1)
@@ -284,16 +345,29 @@ class EnsembleModel:
         predictions = {}
         forecasts = {}
         
-        # Get predictions from all models
-        for name, model in self.models.items():
-            if self.confidences.get(name, 0) > 0:
-                try:
-                    forecast, next_pred = model.predict(closes, horizon)
-                    predictions[name] = next_pred
-                    forecasts[name] = forecast
-                except Exception as e:
+        # Parallel prediction for all models using ThreadPoolExecutor
+        # This speeds up ensemble inference by running models concurrently
+        start_time = time.time()
+        
+        with ThreadPoolExecutor(max_workers=min(len(self.models), 7)) as executor:
+            # Submit all model predictions
+            futures = {
+                executor.submit(self._predict_single_model, name, model, closes, horizon): name
+                for name, model in self.models.items()
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(futures):
+                name, forecast, next_pred, error = future.result()
+                if error:
+                    print(f"Model {name} prediction failed: {error}")
                     predictions[name] = None
                     forecasts[name] = None
+                else:
+                    predictions[name] = next_pred
+                    forecasts[name] = forecast
+        
+        parallel_execution_time = time.time() - start_time
         
         # Prophet prediction
         if self.prophet and not self.prophet_failed and self.confidences.get('prophet', 0) > 0:
@@ -317,7 +391,8 @@ class EnsembleModel:
         weights, use_performance_based = self._calculate_performance_weights(
             valid_models, 
             symbol=symbol, 
-            interval=interval or self.interval
+            interval=interval or self.interval,
+            closes=closes
         )
         
         # Weighted next prediction
@@ -367,6 +442,9 @@ class EnsembleModel:
             "models": model_breakdown,
             "weighting_method": "performance" if use_performance_based else "confidence"
         }
+        
+        # Add performance metrics (optional, for monitoring)
+        result["parallel_execution_time"] = round(parallel_execution_time, 3)
         
         if self.warnings:
             result["warnings"] = list(dict.fromkeys(self.warnings))

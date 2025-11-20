@@ -75,6 +75,8 @@ export interface BacktestParams {
   commission?: number;
   positionSize?: number;
   threshold?: number;
+  slippage?: number;
+  slippageType?: string;
 }
 
 export interface BacktestResult {
@@ -92,9 +94,21 @@ export interface BacktestResult {
     totalTrades: number;
     avgWin: number;
     avgLoss: number;
+    totalSlippage?: number;
+    slippageImpactPercent?: number;
   };
   equityCurve: Array<{ date: string; value: number; price: number }>;
-  trades: Array<{ date: string; type: "buy" | "sell"; price: number; shares: number; pnl?: number; cost?: number }>;
+  trades: Array<{ 
+    date: string; 
+    type: "buy" | "sell"; 
+    price: number; 
+    execution_price?: number;
+    shares: number; 
+    pnl?: number; 
+    cost?: number;
+    slippage_cost?: number;
+    slippage_pct?: number;
+  }>;
 }
 
 export function useBacktest(params: BacktestParams, enabled = true) {
@@ -107,10 +121,12 @@ export function useBacktest(params: BacktestParams, enabled = true) {
     commission = 0.001,
     positionSize = 1.0,
     threshold = 0.0,
+    slippage = 0.0005,
+    slippageType = "hybrid",
   } = params;
 
   return useQuery({
-    queryKey: ["backtest", symbol, range, interval, strategy, initialCapital, commission, positionSize, threshold],
+    queryKey: ["backtest", symbol, range, interval, strategy, initialCapital, commission, positionSize, threshold, slippage, slippageType],
     queryFn: () => {
       const queryParams = new URLSearchParams({
         range,
@@ -120,6 +136,8 @@ export function useBacktest(params: BacktestParams, enabled = true) {
         commission: commission.toString(),
         position_size: positionSize.toString(),
         threshold: threshold.toString(),
+        slippage: slippage.toString(),
+        slippage_type: slippageType,
       });
       return apiGet<BacktestResult>(`/api/backtest/${symbol}?${queryParams}`);
     },

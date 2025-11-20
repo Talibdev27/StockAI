@@ -472,7 +472,7 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div>
-                  <PerformanceMetrics metrics={mockMetrics} />
+              <PerformanceMetrics metrics={mockMetrics} />
                   <div className="mt-4 text-sm text-muted-foreground text-center">
                     <p>No evaluated predictions yet. Make predictions and evaluate them to see real performance metrics.</p>
                   </div>
