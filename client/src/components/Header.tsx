@@ -11,6 +11,7 @@ export default function Header() {
     { path: "/", label: "Dashboard" },
     { path: "/predictions", label: "Predictions" },
     { path: "/backtest", label: "Backtest Results" },
+    { path: "/prediction-accuracy", label: "Accuracy Analysis" },
     { path: "/about", label: "About" },
   ];
 

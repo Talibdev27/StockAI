@@ -8,6 +8,7 @@ import Header from "@/components/Header";
 import Dashboard from "@/pages/Dashboard";
 import Predictions from "@/pages/Predictions";
 import Backtest from "@/pages/Backtest";
+import PredictionAccuracy from "@/pages/PredictionAccuracy";
 import About from "@/pages/About";
 import NotFound from "@/pages/not-found";
 
@@ -17,6 +18,7 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/predictions" component={Predictions} />
       <Route path="/backtest" component={Backtest} />
+      <Route path="/prediction-accuracy" component={PredictionAccuracy} />
       <Route path="/about" component={About} />
       <Route component={NotFound} />
     </Switch>

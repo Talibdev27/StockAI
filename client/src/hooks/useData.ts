@@ -1,5 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { apiGet } from "@/lib/api";
+import {
+  transformHistoryItemToAccuracyPoint,
+  calculateConfidenceInterval,
+  classifyAccuracy,
+  calculateAccuracyMetrics,
+  type PredictionAccuracyPoint,
+} from "@/lib/predictionAccuracyUtils";
 
 export function useBackendHealth() {
   return useQuery({
@@ -79,6 +87,18 @@ export interface BacktestParams {
   slippageType?: string;
 }
 
+export interface DetailedPrediction {
+  date: string;
+  predictedPrice: number;
+  confidence: number;
+  confidenceInterval: {
+    upper: number;
+    lower: number;
+  };
+  modelBreakdown: Record<string, any>;
+  actualPrice: number | null;
+}
+
 export interface BacktestResult {
   symbol: string;
   period: { start: string; end: string };
@@ -109,9 +129,10 @@ export interface BacktestResult {
     slippage_cost?: number;
     slippage_pct?: number;
   }>;
+  detailedPredictions?: DetailedPrediction[];
 }
 
-export function useBacktest(params: BacktestParams, enabled = true) {
+export function useBacktest(params: BacktestParams, enabled = true, includePredictions = false) {
   const {
     symbol,
     range = "1y",
@@ -126,7 +147,7 @@ export function useBacktest(params: BacktestParams, enabled = true) {
   } = params;
 
   return useQuery({
-    queryKey: ["backtest", symbol, range, interval, strategy, initialCapital, commission, positionSize, threshold, slippage, slippageType],
+    queryKey: ["backtest", symbol, range, interval, strategy, initialCapital, commission, positionSize, threshold, slippage, slippageType, includePredictions],
     queryFn: () => {
       const queryParams = new URLSearchParams({
         range,
@@ -139,6 +160,9 @@ export function useBacktest(params: BacktestParams, enabled = true) {
         slippage: slippage.toString(),
         slippage_type: slippageType,
       });
+      if (includePredictions) {
+        queryParams.append("include_predictions", "true");
+      }
       return apiGet<BacktestResult>(`/api/backtest/${symbol}?${queryParams}`);
     },
     enabled: enabled && !!symbol,
@@ -302,4 +326,124 @@ export function useTradingPerformance(symbol?: string, interval?: string, lookba
   });
 }
 
+export interface ModelPerformanceMetrics {
+  [modelName: string]: {
+    rmse: number;
+    mae: number;
+    direction_accuracy: number;
+    count: number;
+    score: number;
+  };
+}
+
+export function useModelPerformance(symbol?: string, interval?: string) {
+  return useQuery({
+    queryKey: ["model-performance", symbol || "all", interval],
+    queryFn: () => {
+      // Use the performance endpoint which includes model metrics
+      const params = interval ? new URLSearchParams({ interval }) : "";
+      const url = symbol 
+        ? `/api/predictions/performance/${symbol}${params ? `?${params}` : ""}`
+        : `/api/predictions/performance${params ? `?${params}` : ""}`;
+      return apiGet<TradingPerformanceMetrics>(url);
+    },
+    enabled: true,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+}
+
+export interface PredictionAccuracyData {
+  points: import("@/lib/predictionAccuracyUtils").PredictionAccuracyPoint[];
+  stats: PredictionStats;
+  modelMetrics?: ModelPerformanceMetrics;
+}
+
+export type DataSource = "historical" | "backtest";
+
+export function usePredictionAccuracyData(
+  source: DataSource,
+  symbol: string | undefined,
+  interval?: string,
+  backtestParams?: BacktestParams
+) {
+  const historicalHistory = usePredictionHistory(symbol, 500, 0, interval);
+  const historicalStats = usePredictionStats(symbol, interval);
+  const backtestResult = useBacktest(
+    backtestParams || {
+      symbol: symbol || "",
+      range: "1y",
+      interval: interval || "1d",
+    },
+    source === "backtest" && !!symbol,
+    true // include predictions
+  );
+
+  // Transform data based on source
+  const data = useMemo(() => {
+    if (source === "historical") {
+      if (!historicalHistory.data || !historicalStats.data) {
+        return null;
+      }
+
+      const points = historicalHistory.data
+        .map(transformHistoryItemToAccuracyPoint)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      return {
+        points,
+        stats: historicalStats.data,
+        modelMetrics: undefined, // Would need separate endpoint
+      } as PredictionAccuracyData;
+    } else {
+      // Backtest source
+      if (!backtestResult.data?.detailedPredictions) {
+        return null;
+      }
+
+      const points: PredictionAccuracyPoint[] = backtestResult.data.detailedPredictions.map((pred) => {
+        const errorPercent =
+          pred.actualPrice !== null
+            ? Math.abs(((pred.predictedPrice - pred.actualPrice) / pred.actualPrice) * 100)
+            : null;
+
+        return {
+          date: pred.date,
+          actualPrice: pred.actualPrice,
+          predictedPrice: pred.predictedPrice,
+          confidence: pred.confidence,
+          confidenceInterval: pred.confidenceInterval,
+          errorPercent,
+          accuracyStatus: classifyAccuracy(errorPercent, pred.actualPrice),
+          modelBreakdown: pred.modelBreakdown,
+        };
+      });
+
+      // Calculate stats from points
+      const metrics = calculateAccuracyMetrics(points);
+
+      return {
+        points,
+        stats: {
+          total: points.length,
+          direction_accuracy: metrics.directionAccuracy,
+          avg_error: metrics.avgError,
+          avg_error_percent: metrics.avgError,
+          rmse: metrics.rmse,
+          mae: metrics.mae,
+        },
+        modelMetrics: undefined,
+      } as PredictionAccuracyData;
+    }
+  }, [source, historicalHistory.data, historicalStats.data, backtestResult.data]);
+
+  return {
+    data,
+    isLoading: source === "historical" 
+      ? historicalHistory.isLoading || historicalStats.isLoading
+      : backtestResult.isLoading,
+    error: source === "historical"
+      ? historicalHistory.error || historicalStats.error
+      : backtestResult.error,
+  };
+}
 

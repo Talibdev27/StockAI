@@ -592,8 +592,12 @@ def backtest(symbol: str):
         date_key = "Datetime" if "Datetime" in df.columns else "Date"
         dates = pd.to_datetime(df[date_key]).dt.strftime("%Y-%m-%d").tolist()
         
+        # Check if detailed predictions are requested
+        include_predictions = request.args.get("include_predictions", "false").lower() == "true"
+        
         # Generate predictions for each point using walk-forward analysis
         predictions = []
+        detailed_predictions = [] if include_predictions else None
         horizon = 1  # We only need next period prediction
         
         print(f"Running backtest for {symbol} with {len(closes)} data points...")
@@ -613,9 +617,48 @@ def backtest(symbol: str):
                 next_pred = result["predictedPrice"]
                 predictions.append(next_pred)
                 
-            except Exception:
+                # Store detailed prediction data if requested
+                if include_predictions:
+                    # Calculate confidence interval from model predictions
+                    model_predictions = [model_info["prediction"] for model_info in result.get("models", {}).values()]
+                    if model_predictions:
+                        import numpy as np
+                        std_dev = np.std(model_predictions)
+                        confidence_upper = next_pred + std_dev
+                        confidence_lower = next_pred - std_dev
+                    else:
+                        confidence_upper = next_pred
+                        confidence_lower = next_pred
+                    
+                    detailed_predictions.append({
+                        "date": dates[i + 1] if i + 1 < len(dates) else dates[i],  # Prediction is for next period
+                        "predictedPrice": next_pred,
+                        "confidence": result.get("confidence", 0),
+                        "confidenceInterval": {
+                            "upper": round(confidence_upper, 2),
+                            "lower": round(confidence_lower, 2)
+                        },
+                        "modelBreakdown": result.get("models", {}),
+                        "actualPrice": float(closes[i + 1]) if i + 1 < len(closes) else None,
+                    })
+                
+            except Exception as e:
                 # If prediction fails, use current price as fallback
-                predictions.append(float(closes[i]))
+                fallback_pred = float(closes[i])
+                predictions.append(fallback_pred)
+                
+                if include_predictions:
+                    detailed_predictions.append({
+                        "date": dates[i + 1] if i + 1 < len(dates) else dates[i],
+                        "predictedPrice": fallback_pred,
+                        "confidence": 0,
+                        "confidenceInterval": {
+                            "upper": fallback_pred,
+                            "lower": fallback_pred
+                        },
+                        "modelBreakdown": {},
+                        "actualPrice": float(closes[i + 1]) if i + 1 < len(closes) else None,
+                    })
         
         # Pad predictions (use last value for remaining points)
         while len(predictions) < len(closes):
@@ -656,6 +699,10 @@ def backtest(symbol: str):
             interval=interval,
         )
         results["symbol"] = symbol
+        
+        # Add detailed predictions if requested
+        if include_predictions and detailed_predictions:
+            results["detailedPredictions"] = detailed_predictions
         
         return jsonify(results)
         
