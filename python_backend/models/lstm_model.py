@@ -181,23 +181,49 @@ class LSTMModel:
         # Reshape for LSTM: (samples, timesteps, features)
         X = np.reshape(X, (X.shape[0], X.shape[1], 1))
         
-        # Build LSTM model architecture (optionally bidirectional)
-        seq_layers = []
-        lstm1 = layers.LSTM(self.units1, return_sequences=True, input_shape=(self.lag, 1))
-        seq_layers.append(layers.Bidirectional(lstm1) if self.bidirectional else lstm1)
-        seq_layers.append(layers.Dropout(self.dropout))
+        # Build shared LSTM feature extractor (optionally bidirectional)
+        inputs = layers.Input(shape=(self.lag, 1), name="price_sequence")
+        lstm1 = layers.LSTM(self.units1, return_sequences=True)
+        x = layers.Bidirectional(lstm1)(inputs) if self.bidirectional else lstm1(inputs)
+        x = layers.Dropout(self.dropout)(x)
 
         lstm2 = layers.LSTM(self.units2, return_sequences=False)
-        seq_layers.append(layers.Bidirectional(lstm2) if self.bidirectional else lstm2)
-        seq_layers.append(layers.Dropout(self.dropout))
+        x = layers.Bidirectional(lstm2)(x) if self.bidirectional else lstm2(x)
+        x = layers.Dropout(self.dropout)(x)
 
-        seq_layers.append(layers.Dense(25))
-        seq_layers.append(layers.Dense(1))
+        shared = layers.Dense(25, name="shared_dense")(x)
 
-        self.model = keras.Sequential(seq_layers)
+        # Price regression head
+        price_output = layers.Dense(1, name="price")(shared)
+
+        # Direction classification head (Up vs non-Up)
+        direction_output = layers.Dense(1, activation="sigmoid", name="direction")(shared)
+
+        self.model = keras.Model(inputs=inputs, outputs=[price_output, direction_output])
         
-        # Compile model with MSE loss to derive RMSE; track MAE metric
-        self.model.compile(optimizer="adam", loss="mse", metrics=["mae"])
+        # Prepare direction labels: 1 if next price meaningfully higher than current, else 0
+        directions = []
+        closes_arr = np.asarray(closes, dtype=float)
+        for i in range(self.lag, len(closes_arr)):
+            prev_price = closes_arr[i - 1]
+            next_price = closes_arr[i]
+            if prev_price <= 0:
+                directions.append(0.0)
+                continue
+            change = (next_price - prev_price) / prev_price
+            directions.append(1.0 if change > 0.001 else 0.0)
+        y_dir = np.array(directions).reshape(-1, 1)
+
+        # Compile model with dual-objective loss:
+        # - price: MSE (regression)
+        # - direction: binary cross-entropy (classification)
+        # Direction gets higher weight to emphasize correct sign.
+        self.model.compile(
+            optimizer="adam",
+            loss={"price": "mse", "direction": "binary_crossentropy"},
+            loss_weights={"price": 0.4, "direction": 0.6},
+            metrics={"price": ["mae"], "direction": ["accuracy"]},
+        )
         
         # Callbacks: EarlyStopping and ReduceLROnPlateau
         callbacks = [
@@ -219,7 +245,7 @@ class LSTMModel:
         # Train with validation split
         history = self.model.fit(
             X,
-            y,
+            {"price": y, "direction": y_dir},
             batch_size=self.batch_size,
             epochs=self.epochs,
             validation_split=0.2,
@@ -227,9 +253,19 @@ class LSTMModel:
             verbose=0,
         )
         
-        # Metrics from validation
-        val_loss = float(history.history["val_loss"][np.argmin(history.history["val_loss"])])
-        val_mae = float(history.history.get("val_mae", [None])[-1] or 0.0)
+        # Metrics from validation (price head)
+        # Prefer dedicated price loss key if available.
+        if "val_price_loss" in history.history:
+            val_price_losses = history.history["val_price_loss"]
+            best_idx = int(np.argmin(val_price_losses))
+            val_loss = float(val_price_losses[best_idx])
+        else:
+            val_losses = history.history.get("val_loss", [0.0])
+            best_idx = int(np.argmin(val_losses))
+            val_loss = float(val_losses[best_idx])
+
+        val_mae_series = history.history.get("val_price_mae") or history.history.get("val_mae")
+        val_mae = float(val_mae_series[best_idx]) if val_mae_series else 0.0
         val_rmse = math.sqrt(val_loss) if val_loss > 0 else 0.0
 
         self.metrics = {"rmse": round(val_rmse, 6), "mae": round(val_mae, 6)}
@@ -269,7 +305,15 @@ class LSTMModel:
         for _ in range(horizon):
             # Reshape for LSTM prediction
             X_pred = np.reshape(current_window, (1, self.lag, 1))
-            pred_scaled = self.model.predict(X_pred, verbose=0)[0, 0]
+            raw_pred = self.model.predict(X_pred, verbose=0)
+
+            # Support both legacy single-output and new dual-output models
+            if isinstance(raw_pred, (list, tuple)):
+                price_head = raw_pred[0]
+            else:
+                price_head = raw_pred
+
+            pred_scaled = price_head[0, 0]
             
             # Inverse transform to get actual price
             pred = self.scaler.inverse_transform([[pred_scaled]])[0, 0]

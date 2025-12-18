@@ -118,7 +118,8 @@ class EnsembleModel:
         self.performance_metrics = {}  # Cache for performance metrics
         
         # Direction weighting configuration (configurable via environment variable)
-        self.direction_weight = float(os.getenv("ENSEMBLE_DIRECTION_WEIGHT", "0.4"))  # Default 40% weight for direction
+        # Higher default weight for directional accuracy when performance data is available.
+        self.direction_weight = float(os.getenv("ENSEMBLE_DIRECTION_WEIGHT", "0.7"))
         
     def _predict_single_model(self, name, model, closes, horizon):
         """
@@ -271,7 +272,9 @@ class EnsembleModel:
             # Use performance score if available, otherwise use confidence
             # Recalculate performance score with configurable direction weight
             performance_scores = {}
-            direction_weight = 0.5 if prioritize_direction else self.direction_weight
+            # When prioritize_direction is True (e.g. daily interval),
+            # tilt weights even more strongly toward directional accuracy.
+            direction_weight = self.direction_weight if prioritize_direction else min(self.direction_weight, 0.5)
             
             # Estimate average price from closes for RMSE normalization
             # Use median of recent closes as representative price
@@ -387,12 +390,17 @@ class EnsembleModel:
         if not valid_models:
             raise ValueError("No models produced valid predictions")
         
-        # Calculate weights using performance-based or confidence-based method
+        # Calculate weights using performance-based or confidence-based method.
+        # For daily predictions, explicitly prioritize directional accuracy
+        # when performance data is available.
+        eff_interval = interval or self.interval
+        prioritize_direction = eff_interval == "1d"
         weights, use_performance_based = self._calculate_performance_weights(
-            valid_models, 
-            symbol=symbol, 
-            interval=interval or self.interval,
-            closes=closes
+            valid_models,
+            symbol=symbol,
+            interval=eff_interval,
+            closes=closes,
+            prioritize_direction=prioritize_direction,
         )
         
         # Weighted next prediction

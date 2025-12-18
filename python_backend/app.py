@@ -10,7 +10,17 @@ import numpy as np
 from yahooquery import Ticker
 from models.ensemble import EnsembleModel
 from backtest import BacktestEngine
-from evaluation import save_prediction, evaluate_pending_predictions, get_prediction_history, get_prediction_stats, get_trading_performance_metrics, delete_prediction, delete_predictions_by_symbol
+from evaluation import (
+    save_prediction,
+    evaluate_pending_predictions,
+    get_prediction_history,
+    get_prediction_stats,
+    get_trading_performance_metrics,
+    delete_prediction,
+    delete_predictions_by_symbol,
+    classify_direction,
+    get_directional_bias_metrics,
+)
 
 # Technical indicators
 try:
@@ -447,11 +457,14 @@ def predict(symbol: str):
     horizon = int(request.args.get("horizon", 5))
     range_param = request.args.get("range", "1y")
     interval = request.args.get("interval", "1d")
+    force_retrain = request.args.get("force_retrain", "false").lower() in ("true", "1", "yes")
 
+    # Don't cache if force_retrain is enabled
     cache_key = f"pred:{symbol}:{range_param}:{interval}:{horizon}"
-    cached = _cache_get(cache_key, ttl_seconds=60 * 5)
-    if cached is not None:
-        return jsonify(cached)
+    if not force_retrain:
+        cached = _cache_get(cache_key, ttl_seconds=60 * 5)
+        if cached is not None:
+            return jsonify(cached)
 
     try:
         ticker = Ticker(symbol)
@@ -492,8 +505,10 @@ def predict(symbol: str):
         # Use ensemble model
         ensemble = EnsembleModel(interval=interval)
         
-        # Train all models
-        training_results = ensemble.train_all(closes, symbol=symbol, interval=interval, force_retrain=False)
+        # Train all models (with optional force_retrain)
+        if force_retrain:
+            print(f"🔄 Force retraining models for {symbol} ({interval})...")
+        training_results = ensemble.train_all(closes, symbol=symbol, interval=interval, force_retrain=force_retrain)
         
         # Get ensemble prediction (pass symbol and interval for performance-based weighting)
         result = ensemble.predict_ensemble(closes, horizon, symbol=symbol, interval=interval)
@@ -501,12 +516,61 @@ def predict(symbol: str):
         result["training"] = training_results  # Optional: for debugging
         if getattr(ensemble, "warnings", None):
             result["warnings"] = list(dict.fromkeys(ensemble.warnings))
-        
+
         # Get current price for saving prediction
         current_price = float(closes[-1]) if len(closes) > 0 else 0.0
-        predicted_price = result.get("predictedPrice", 0.0)
-        confidence = result.get("confidence", 0.0)
+        predicted_price = float(result.get("predictedPrice", 0.0))
+        confidence = float(result.get("confidence", 0.0))
         model_breakdown = result.get("models", {})
+
+        # ---------- Post-processing filter for overly-bearish 1d signals ----------
+        raw_predicted_price = predicted_price
+        raw_confidence = confidence
+        predicted_direction = None
+        adjusted_direction = None
+        adjustment_reason = None
+
+        if current_price > 0:
+            # Classify raw direction using same logic as evaluation module
+            predicted_direction = classify_direction(
+                predicted_price,
+                current_price,
+                threshold=0.005,
+            )
+
+            # Apply conservative filter only for daily interval
+            if interval == "1d" and predicted_direction == "down" and confidence >= 75.0:
+                # Compute short-term context: distance from 5-day moving average
+                if len(closes) >= 5:
+                    recent_closes = closes[-5:]
+                    ma5 = float(np.mean(recent_closes))
+                    if ma5 > 0:
+                        distance = (current_price - ma5) / ma5
+                        # If price is not meaningfully extended from the short-term mean,
+                        # treat very bearish signals as potentially mean-reversion bias.
+                        if abs(distance) <= 0.02:
+                            adjusted_direction = "neutral"
+                            adjustment_reason = (
+                                "mean_reversion_filter: high-confidence down signal near 5-day MA"
+                            )
+                            # Shrink the move toward current price (blend 70% current, 30% raw)
+                            adjusted_price = current_price * 0.7 + raw_predicted_price * 0.3
+                            predicted_price = float(adjusted_price)
+                            result["predictedPrice"] = round(predicted_price, 2)
+                            # Reduce confidence to reflect post-processed neutrality
+                            confidence = min(confidence, 60.0)
+                            result["confidence"] = round(confidence, 1)
+
+        # Attach post-processing diagnostics so frontend / analysis can see bias handling
+        if current_price > 0:
+            result["postProcessing"] = {
+                "rawPredictedPrice": round(raw_predicted_price, 2),
+                "rawConfidence": round(raw_confidence, 1),
+                "predictedDirectionRaw": predicted_direction,
+                "predictedDirectionAdjusted": adjusted_direction or predicted_direction,
+                "adjusted": adjusted_direction is not None,
+                "adjustmentReason": adjustment_reason,
+            }
         
         # Save prediction to database (only save next-period prediction, horizon=1)
         if horizon >= 1:
@@ -516,8 +580,8 @@ def predict(symbol: str):
                     interval=interval,
                     horizon=1,  # Save as next-period prediction
                     current_price=current_price,
-                    predicted_price=predicted_price,
-                    confidence=confidence,
+                    predicted_price=float(predicted_price),
+                    confidence=float(confidence),
                     model_breakdown=model_breakdown,
                 )
                 result["prediction_id"] = prediction_id
@@ -774,6 +838,25 @@ def trading_performance(symbol: str = None):
     except Exception as e:
         print(f"Performance metrics error: {e}")
         return jsonify({"error": f"Failed to fetch performance metrics: {str(e)}"}), 500
+
+
+@app.get("/api/predictions/bias")
+@app.get("/api/predictions/bias/<symbol>")
+def prediction_bias(symbol: str = None):
+    """Analyze directional bias and confidence calibration for predictions."""
+    interval = request.args.get("interval", None)
+    lookback_days = int(request.args.get("lookback_days", 90))
+
+    try:
+        metrics = get_directional_bias_metrics(
+            symbol=symbol,
+            interval=interval,
+            lookback_days=lookback_days,
+        )
+        return jsonify(metrics)
+    except Exception as e:
+        print(f"Bias metrics error: {e}")
+        return jsonify({"error": f"Failed to fetch bias metrics: {str(e)}"}), 500
 
 
 @app.delete("/api/predictions/<int:prediction_id>")

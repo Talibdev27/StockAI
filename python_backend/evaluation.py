@@ -914,6 +914,175 @@ def get_prediction_stats(symbol: Optional[str] = None, interval: Optional[str] =
     }
 
 
+def get_directional_bias_metrics(
+    symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+    lookback_days: int = 90,
+) -> Dict[str, Any]:
+    """
+    Analyze directional bias and confidence calibration for evaluated predictions.
+
+    Focuses on how often predictions call Up/Down/Neutral versus what actually
+    happens, and in particular whether high-confidence Down calls are overused
+    or systematically wrong.
+
+    Args:
+        symbol: Filter by symbol
+        interval: Filter by interval (e.g. \"1d\")
+        lookback_days: Approximate number of recent days of evaluations to analyze
+
+    Returns:
+        Dictionary with bias and calibration statistics that can be used by the
+        backend, dashboards, or reports.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    placeholder = _get_placeholder()
+
+    query = '''
+        SELECT 
+            p.current_price,
+            p.predicted_price,
+            p.confidence,
+            p.interval,
+            p.symbol,
+            p.timestamp,
+            e.actual_price,
+            e.direction_actual,
+            e.direction_predicted,
+            e.correct
+        FROM predictions p
+        JOIN evaluations e ON p.id = e.prediction_id
+    '''
+    params: List[Any] = []
+    conditions: List[str] = []
+
+    if symbol:
+        conditions.append(f"p.symbol = {placeholder}")
+        params.append(symbol)
+    if interval:
+        conditions.append(f"p.interval = {placeholder}")
+        params.append(interval)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY p.timestamp DESC"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {
+            "total": 0,
+            "direction_counts": {},
+            "confusion_matrix": {},
+            "down_bias": {},
+            "confidence_buckets": {},
+        }
+
+    records = [_row_to_dict(r) for r in rows]
+
+    # Limit to a recent window heuristically (no strict calendar filtering needed)
+    if lookback_days > 0:
+        records = records[: min(len(records), lookback_days * 4)]
+
+    total = len(records)
+
+    # Direction counts and confusion matrix
+    direction_counts: Dict[str, int] = {"up": 0, "down": 0, "neutral": 0}
+    actual_counts: Dict[str, int] = {"up": 0, "down": 0, "neutral": 0}
+    confusion: Dict[str, Dict[str, int]] = {
+        "up": {"up": 0, "down": 0, "neutral": 0},
+        "down": {"up": 0, "down": 0, "neutral": 0},
+        "neutral": {"up": 0, "down": 0, "neutral": 0},
+    }
+
+    # Down-bias specific aggregates
+    down_errors: List[float] = []
+    down_error_percents: List[float] = []
+    down_realized_moves: List[float] = []  # (actual - current) / current * 100
+
+    # Confidence calibration buckets for Down predictions
+    bucket_edges = [0, 60, 70, 80, 90, 101]
+    bucket_labels = ["<60", "60-70", "70-80", "80-90", "90+"]
+    bucket_totals = {lbl: 0 for lbl in bucket_labels}
+    bucket_down_hits = {lbl: 0 for lbl in bucket_labels}
+
+    for rec in records:
+        current = rec.get("current_price")
+        predicted = rec.get("predicted_price")
+        actual = rec.get("actual_price")
+        confidence = rec.get("confidence", 0.0) or 0.0
+        dir_pred = (rec.get("direction_predicted") or "").lower()
+        dir_act = (rec.get("direction_actual") or "").lower()
+
+        if dir_pred not in direction_counts:
+            continue
+        if dir_act not in actual_counts:
+            continue
+        if current is None or actual is None or current == 0:
+            continue
+
+        direction_counts[dir_pred] += 1
+        actual_counts[dir_act] += 1
+        confusion[dir_pred][dir_act] += 1
+
+        # Down-bias tracking
+        if dir_pred == "down":
+            error = abs(predicted - actual)
+            error_percent = (error / current) * 100
+            down_errors.append(error)
+            down_error_percents.append(error_percent)
+            realized_move = ((actual - current) / current) * 100
+            down_realized_moves.append(realized_move)
+
+            # Confidence bucket calibration: how often actual is really down
+            bucket_idx = None
+            for i in range(len(bucket_edges) - 1):
+                if bucket_edges[i] <= confidence < bucket_edges[i + 1]:
+                    bucket_idx = i
+                    break
+            if bucket_idx is not None:
+                label = bucket_labels[bucket_idx]
+                bucket_totals[label] += 1
+                if dir_act == "down":
+                    bucket_down_hits[label] += 1
+
+    # Build bucket calibration stats
+    confidence_buckets: Dict[str, Any] = {}
+    for lbl in bucket_labels:
+        total_b = bucket_totals[lbl]
+        hits_b = bucket_down_hits[lbl]
+        hit_rate = (hits_b / total_b * 100) if total_b > 0 else 0.0
+        confidence_buckets[lbl] = {
+            "count": total_b,
+            "down_hit_rate": round(hit_rate, 2),
+        }
+
+    down_bias = {
+        "count": len(down_errors),
+        "avg_error": round(float(np.mean(down_errors)), 2) if down_errors else 0.0,
+        "avg_error_percent": round(float(np.mean(down_error_percents)), 2)
+        if down_error_percents
+        else 0.0,
+        "avg_realized_move_percent": round(float(np.mean(down_realized_moves)), 2)
+        if down_realized_moves
+        else 0.0,
+    }
+
+    return {
+        "total": total,
+        "direction_counts": direction_counts,
+        "actual_direction_counts": actual_counts,
+        "confusion_matrix": confusion,
+        "down_bias": down_bias,
+        "confidence_buckets": confidence_buckets,
+    }
+
+
 def get_prediction_history(
     symbol: Optional[str] = None,
     limit: int = 100,

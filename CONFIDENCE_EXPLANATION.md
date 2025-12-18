@@ -52,11 +52,40 @@ The backend multiplies by 100 to convert to percentage:
 - ARIMA: 0.50 (50%)
 - Ensemble (equal weights): (0.85 + 0.99 + 0.50) / 3 = 0.78 → **78%**
 
-## Bug Fix Needed
+## Direction vs. Price: Balancing Objectives
 
-The frontend is multiplying confidence by 100 again:
-- Backend returns: `79.0` (meaning 79%)
-- Frontend displays: `79.0 * 100 = 7900%` ❌
+The system now explicitly balances **price accuracy** and **directional accuracy**:
 
-**Fix:** Remove `* 100` in frontend since confidence is already a percentage.
+- LSTM uses a **dual-head architecture**:
+  - `price` head (regression, MSE loss).
+  - `direction` head (Up vs non-Up, binary cross-entropy loss).
+  - Combined loss: `0.6 * direction + 0.4 * price` to emphasize correct sign.
+- The ensemble weighting gives **more weight** to models with better:
+  - Directional hit rate (especially for 1d interval).
+  - Normalized RMSE.
+
+This helps reduce the previous mean-reversion bias where daily predictions
+were systematically a few percent below price.
+
+## Post-Processing Guardrails for 1d Predictions
+
+For **daily (1d) predictions**, the backend adds a conservative filter:
+
+- If the ensemble predicts **Down** with **confidence ≥ 75%**, and
+- The current price is within about **±2% of the 5‑day moving average**,
+
+then the system:
+
+1. Shrinks the predicted move toward the current price.
+2. Often downgrades the direction to **Neutral**.
+3. Lowers the reported confidence.
+
+The API exposes this in the `postProcessing` field:
+
+- `rawPredictedPrice`, `rawConfidence`
+- `predictedDirectionRaw`, `predictedDirectionAdjusted`
+- `adjusted` (boolean), `adjustmentReason`
+
+These values are useful for debugging and for explaining why some overly
+bearish signals are softened in the final output.
 

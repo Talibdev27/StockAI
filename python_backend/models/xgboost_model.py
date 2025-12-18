@@ -129,30 +129,83 @@ class XGBoostModel:
         X_train, y_train = X[:split], y[:split]
         X_val, y_val = X[split:], y[split:]
 
-        self.model = XGBRegressor(
-            n_estimators=500,        # Increased from 300 - more trees
-            max_depth=8,             # Increased from 6 - capture complex patterns
-            learning_rate=0.04,      # Decreased from 0.05 - better convergence
-            subsample=0.8,           # Feature sampling per tree
-            colsample_bytree=0.8,    # Column sampling per tree
-            min_child_weight=3,      # Prevent overfitting on small samples
-            gamma=0.1,               # Minimum loss reduction required
-            reg_alpha=0.1,           # L1 regularization
-            reg_lambda=1.0,          # L2 regularization
-            objective="reg:squarederror",
-            random_state=self.seed,
-            n_jobs=-1,               # Use all CPU cores
-            tree_method="hist",
-            verbosity=0              # Reduce console spam
-        )
-        self.model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_train, y_train), (X_val, y_val)],
-            eval_metric='rmse',
-            early_stopping_rounds=20,  # Stop if no improvement after 20 rounds
-            verbose=False,
-        )
+        # Try to detect XGBoost version and use appropriate API
+        try:
+            import xgboost as xgb
+            xgb_version = xgb.__version__
+            # For XGBoost 2.0+, early_stopping_rounds moved to constructor
+            if xgb_version.startswith('2.'):
+                self.model = XGBRegressor(
+                    n_estimators=500,
+                    max_depth=8,
+                    learning_rate=0.04,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    min_child_weight=3,
+                    gamma=0.1,
+                    reg_alpha=0.1,
+                    reg_lambda=1.0,
+                    objective="reg:squarederror",
+                    random_state=self.seed,
+                    n_jobs=-1,
+                    tree_method="hist",
+                    verbosity=0,
+                    eval_metric='rmse',
+                    early_stopping_rounds=20  # In constructor for v2.0+
+                )
+                self.model.fit(
+                    X_train,
+                    y_train,
+                    eval_set=[(X_train, y_train), (X_val, y_val)],
+                    verbose=False,
+                )
+            else:
+                # For XGBoost 1.x, use fit() parameters
+                self.model = XGBRegressor(
+                    n_estimators=500,
+                    max_depth=8,
+                    learning_rate=0.04,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    min_child_weight=3,
+                    gamma=0.1,
+                    reg_alpha=0.1,
+                    reg_lambda=1.0,
+                    objective="reg:squarederror",
+                    random_state=self.seed,
+                    n_jobs=-1,
+                    tree_method="hist",
+                    verbosity=0,
+                    eval_metric='rmse'
+                )
+                self.model.fit(
+                    X_train,
+                    y_train,
+                    eval_set=[(X_train, y_train), (X_val, y_val)],
+                    early_stopping_rounds=20,
+                    verbose=False,
+                )
+        except Exception as e:
+            # Fallback: simple fit without early stopping
+            print(f"Warning: XGBoost version detection failed ({e}), using simple fit")
+            self.model = XGBRegressor(
+                n_estimators=500,
+                max_depth=8,
+                learning_rate=0.04,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                min_child_weight=3,
+                gamma=0.1,
+                reg_alpha=0.1,
+                reg_lambda=1.0,
+                objective="reg:squarederror",
+                random_state=self.seed,
+                n_jobs=-1,
+                tree_method="hist",
+                verbosity=0,
+                eval_metric='rmse'
+            )
+            self.model.fit(X_train, y_train)
 
         # Metrics and confidence
         preds = self.model.predict(X_val)

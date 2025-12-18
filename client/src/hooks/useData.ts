@@ -242,6 +242,20 @@ export interface PredictionStats {
   mae: number;
 }
 
+export interface DirectionalBiasMetrics {
+  total: number;
+  direction_counts: Record<string, number>;
+  actual_direction_counts: Record<string, number>;
+  confusion_matrix: Record<string, Record<string, number>>;
+  down_bias: {
+    count: number;
+    avg_error: number;
+    avg_error_percent: number;
+    avg_realized_move_percent: number;
+  };
+  confidence_buckets: Record<string, { count: number; down_hit_rate: number }>;
+}
+
 export function usePredictionHistory(symbol: string | undefined, limit = 100, offset = 0, interval?: string) {
   return useQuery({
     queryKey: ["prediction-history", symbol || "all", limit, offset, interval],
@@ -273,6 +287,24 @@ export function usePredictionStats(symbol: string | undefined, interval?: string
     },
     enabled: true,
     staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+}
+
+export function useDirectionalBias(symbol: string | undefined, interval?: string, lookbackDays = 90) {
+  return useQuery({
+    queryKey: ["prediction-bias", symbol || "all", interval, lookbackDays],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        lookback_days: lookbackDays.toString(),
+      });
+      if (interval) params.append("interval", interval);
+      const url = symbol
+        ? `/api/predictions/bias/${symbol}?${params}`
+        : `/api/predictions/bias?${params}`;
+      return apiGet<DirectionalBiasMetrics>(url);
+    },
+    enabled: true,
+    staleTime: 1000 * 60 * 5,
   });
 }
 

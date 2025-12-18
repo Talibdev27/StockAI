@@ -8,7 +8,7 @@ import StockSelector from "@/components/StockSelector";
 import TimeRangeSelector, { TimeRange, DateRange } from "@/components/TimeRangeSelector";
 import PredictionAccuracyChart from "@/components/PredictionAccuracyChart";
 import PredictionMetricsCards from "@/components/PredictionMetricsCards";
-import { usePredictionAccuracyData, DataSource } from "@/hooks/useData";
+import { usePredictionAccuracyData, DataSource, useDirectionalBias } from "@/hooks/useData";
 import { filterByTimeRange, PredictionAccuracyPoint } from "@/lib/predictionAccuracyUtils";
 import { usePredictionStats } from "@/hooks/useData";
 
@@ -46,6 +46,7 @@ export default function PredictionAccuracy() {
 
   // Get stats for metrics cards
   const { data: stats } = usePredictionStats(symbol, interval);
+  const { data: biasMetrics } = useDirectionalBias(symbol, interval, 90);
 
   // Filter data by time range
   const filteredPoints = useMemo(() => {
@@ -158,6 +159,42 @@ export default function PredictionAccuracy() {
           <div className="space-y-6">
             {/* Metrics Cards */}
             <PredictionMetricsCards stats={metricsStats} isLoading={isLoading} />
+
+            {/* Directional Bias Summary */}
+            {biasMetrics && (
+              <Card className="p-4">
+                <h3 className="text-lg font-semibold mb-2">Directional Bias (lookback ~90 days)</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <p className="font-medium mb-1">Predicted Direction Mix</p>
+                    <p className="text-muted-foreground">
+                      Up: {biasMetrics.direction_counts.up ?? 0} · Down: {biasMetrics.direction_counts.down ?? 0} ·
+                      Neutral: {biasMetrics.direction_counts.neutral ?? 0}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-medium mb-1">Down-Bias Error (when predicting Down)</p>
+                    <p className="text-muted-foreground">
+                      Avg error: {biasMetrics.down_bias.avg_error_percent.toFixed(2)}% ·
+                      Avg realized move: {biasMetrics.down_bias.avg_realized_move_percent.toFixed(2)}%
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-medium mb-1">High-Confidence Down Calibration</p>
+                    <p className="text-muted-foreground">
+                      80–90% bucket hit-rate:{" "}
+                      {biasMetrics.confidence_buckets["80-90"]
+                        ? `${biasMetrics.confidence_buckets["80-90"].down_hit_rate.toFixed(1)}%`
+                        : "n/a"}
+                      ; 90%+ bucket hit-rate:{" "}
+                      {biasMetrics.confidence_buckets["90+"]
+                        ? `${biasMetrics.confidence_buckets["90+"].down_hit_rate.toFixed(1)}%`
+                        : "n/a"}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            )}
 
             {/* Chart */}
             <Card className="p-6 bg-card/50 backdrop-blur-sm border-border/50">
